@@ -1,0 +1,1111 @@
+---
+# Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS SaaS Factory Multi-Tenant RDBMS Data Isolation Using PostgreSQL Row Level Security
+Parameters:
+  KeyPair: 
+    Description: Amazon EC2 Key Pair
+    Type: AWS::EC2::KeyPair::KeyName
+  DBName:
+    Description: RDS Database Name
+    Type: String
+    MinLength: 3
+    MaxLength: 31
+    AllowedPattern: ^[a-zA-Z]+[a-zA-Z0-9_\$]*$
+    ConstraintDescription: Database name must be between 3 and 31 characters in length
+  DBMasterUsername:
+    Description: RDS Master Username
+    Type: String
+  DBMasterPassword:
+    Description: RDS Master User Password
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    AllowedPattern: ^[a-zA-Z0-9/@"' ]{8,}$
+    ConstraintDescription: RDS passwords must be at least 8 characters in length
+  DBAppUsername:
+    Description: RDS Application Username
+    Type: String
+  DBAppPassword:
+    Description: RDS Application User Password
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    AllowedPattern: ^[a-zA-Z0-9/@"' ]{8,}$
+    ConstraintDescription: RDS passwords must be at least 8 characters in length
+  AMI:
+    Description: EC2 Image ID (don't change)
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+  LambdaS3Bucket:
+    Description: S3 bucket where you uploaded the Lambda code packages
+    Type: String
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: EC2 Configuration
+        Parameters:
+          - KeyPair
+          - AMI
+      - Label:
+          default: CloudFormation Helpers
+        Parameters:
+          - LambdaS3Bucket
+      - Label:
+          default: Database Configuration
+        Parameters:
+          - DBName
+          - DBMasterUsername
+          - DBMasterPassword
+          - DBAppUsername
+          - DBAppPassword
+    ParameterLabels:
+      KeyPair:
+        default: Key Pair for the Jump box
+      DBName:
+        default: Database Name
+      DBMasterUsername:
+        default: RDS Master Username
+      DBMasterPassword:
+        default: RDS Master Password
+      DBAppUsername:
+        default: RDS Application Username
+      DBAppPassword:
+        default: RDS Application Password
+      AMI:
+        default: Do Not Change - Jump Box AMI
+      LambdaS3Bucket:
+        default: S3 Bucket
+#Mappings:
+#Conditions:
+#Transform:
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-vpc
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-igw
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  RouteTablePublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-route-pub
+  RoutePublic:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  SubnetPublicA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.32.0/19
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-subA-pub
+  SubnetPublicARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPublicA
+      RouteTableId: !Ref RouteTablePublic
+  SubnetPublicB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.96.0/19
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-subB-pub
+  SubnetPublicBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPublicB
+      RouteTableId: !Ref RouteTablePublic
+  NatGatewayAddrA:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayAddrA.AllocationId
+      SubnetId: !Ref SubnetPublicA
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-nat-subA-pub
+  RouteTableNatA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-route-natA
+  RouteNatA:
+    Type: AWS::EC2::Route
+    DependsOn: NatGatewayA
+    Properties:
+      RouteTableId: !Ref RouteTableNatA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+  SubnetPrivateA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.0.0/19
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-subA-priv
+  SubnetPrivateARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivateA
+      RouteTableId: !Ref RouteTableNatA
+  NatGatewayAddrB:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayAddrB.AllocationId
+      SubnetId: !Ref SubnetPublicB
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-nat-subB-pub
+  RouteTableNatB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-route-natB
+  RouteNatB:
+    Type: AWS::EC2::Route
+    DependsOn: NatGatewayB
+    Properties:
+      RouteTableId: !Ref RouteTableNatB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+  SubnetPrivateB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.64.0/19
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-subB-priv
+  SubnetPrivateBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivateB
+      RouteTableId: !Ref RouteTableNatB
+  JumpBoxSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: saas-factory-pg-rls-ec2-sg
+      GroupDescription: Jump Box SSH Security Group
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-ec2-sg
+  JumpBox:
+    Type: AWS::EC2::Instance
+    DependsOn: JumpBoxSecurityGroup
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          Setup:
+            - Configure
+        Configure:
+          packages:
+            yum:
+              postgresql: []
+        commands:
+          yum_update:
+            command: yum update -y
+    Properties:
+      ImageId: !Ref AMI
+      InstanceType: t2.micro
+      KeyName: !Ref KeyPair
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref SubnetPublicA
+          GroupSet:
+            - !Ref JumpBoxSecurityGroup
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-jumpbox
+      UserData:
+        Fn::Base64:
+          !Join
+            - ''
+            - - "#!/bin/bash -xe\n"
+              - "yum update -y aws-cfn-bootstrap\n"
+              - "# Run the config sets from the CloudFormation metadata\n"
+              - "/opt/aws/bin/cfn-init -v -s "
+              - !Ref AWS::StackName
+              - " -r JumpBox -c Setup --region "
+              - !Ref AWS::Region
+              - "\n\n"
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: saas-factory-pg-rls-cfn-lambda-role
+      Path: '/'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: saas-factory-pg-rls-cfn-lambda-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - logs:DescribeLogStreams
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                  - ssm:DeleteParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ListKeys
+                  - kms:ListAliases
+                  - kms:Describe*
+                Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                Resource: !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub arn:aws:s3:::${LambdaS3Bucket}
+                  - !Sub arn:aws:s3:::${CodePipelineBucket}
+                  - !Sub arn:aws:s3:::${CloudTrailBucket}
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource:
+                  - !Sub arn:aws:s3:::${LambdaS3Bucket}/*
+                  - !Sub arn:aws:s3:::${CodePipelineBucket}/*
+                  - !Sub arn:aws:s3:::${CloudTrailBucket}/*
+  LambdaSSMPutParamSecureLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-ssm-secure-${AWS::Region}
+      RetentionInDays: 14
+  LambdaSSMPutParamSecure:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaSSMPutParamSecureLogs
+    Properties:
+      FunctionName: !Sub saas-factory-pg-rls-ssm-secure-${AWS::Region}
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: java8
+      Timeout: 30
+      MemorySize: 256
+      Handler: com.amazon.aws.partners.saasfactory.SSMPutParamSecure
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: SSMPutParamSecure.jar
+  InvokeLambdaSSMPutParamSecure:
+    Type: Custom::CustomResource
+    DependsOn: LambdaSSMPutParamSecureLogs
+    Properties:
+      ServiceToken: !GetAtt LambdaSSMPutParamSecure.Arn
+      Name: saas-factory-pg-rls-owner-pw # SSM Parameter Name
+      Value: !Ref DBMasterPassword
+  InvokeLambdaSSMPutParamSecure2:
+    Type: Custom::CustomResource
+    DependsOn: LambdaSSMPutParamSecureLogs
+    Properties:
+      ServiceToken: !GetAtt LambdaSSMPutParamSecure.Arn
+      Name: saas-factory-pg-rls-app-pw
+      Value: !Ref DBAppPassword
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: saas-factory-pg-rls-rds-sg
+      GroupDescription: RDS Aurora PostgreSQL 5432 Security Group
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-rds-sg
+  RDSSecurityGroupIngressJumpBox:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RDSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref JumpBoxSecurityGroup
+  RDSSecurityGroupIngressECS:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: ECSSecurityGroup
+    Properties:
+      GroupId: !Ref RDSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref ECSSecurityGroup
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: saas-factory-pg-rls-rds-subnets
+      DBSubnetGroupName: saas-factory-pg-rls-rds-subnets
+      SubnetIds:
+        - !Ref SubnetPrivateA
+        - !Ref SubnetPrivateB
+  RDSClusterParameterGroup: 
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Family: aurora-postgresql10
+      Description: saas-factory-pg-rls-rds-cluster-parameters
+      Parameters:
+        ssl: true
+  RDSCluster:
+    Type: AWS::RDS::DBCluster
+    DependsOn: RDSClusterParameterGroup
+    DeletionPolicy: Delete
+    Properties:
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      AvailabilityZones: [ !Select [0, !GetAZs ''], !Select [1, !GetAZs ''] ]
+      Engine: aurora-postgresql
+      #EngineMode: serverless
+      EngineVersion: 10.11
+      DBClusterParameterGroupName: !Ref RDSClusterParameterGroup
+      Port: 5432
+      VpcSecurityGroupIds:
+        - !Ref RDSSecurityGroup
+      DBClusterIdentifier: saas-factory-pg-rls-rds-cluster
+      DatabaseName: !Ref DBName
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword:
+        Fn::Join:
+          - ''
+          - - '{{resolve:ssm-secure:saas-factory-pg-rls-owner-pw:'
+            - !GetAtt InvokeLambdaSSMPutParamSecure.Version
+            - '}}'
+  RDSInstance1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref RDSCluster
+      PubliclyAccessible: false
+      AvailabilityZone: !Select [0, !GetAZs '']
+      DBInstanceClass: db.r5.large
+      Engine: aurora-postgresql
+      DBInstanceIdentifier: saas-factory-pg-rls-rds-instance1
+  RDSInstance2:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref RDSCluster
+      PubliclyAccessible: false
+      AvailabilityZone: !Select [1, !GetAZs '']
+      DBInstanceClass: db.r5.large
+      Engine: aurora-postgresql
+      DBInstanceIdentifier: saas-factory-pg-rls-rds-instance2
+  LambdaBootstrapDatabaseLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-rds-bootstrap-${AWS::Region}
+      RetentionInDays: 14
+  LambdaBootstrapDatabase:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - JumpBoxSecurityGroup
+      - LambdaBootstrapDatabaseLogs
+    Properties:
+      FunctionName: !Sub saas-factory-pg-rls-rds-bootstrap-${AWS::Region}
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: java8
+      Timeout: 300
+      MemorySize: 256
+      VpcConfig: # Has to be a VPC Lambda because we're talking to RDS
+        SecurityGroupIds:
+          - !Ref JumpBoxSecurityGroup
+        SubnetIds:
+          - !Ref SubnetPrivateA
+          - !Ref SubnetPrivateB
+      Handler: com.amazon.aws.partners.saasfactory.SaaSFactoryPgRLSBootstrap
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: SaaSFactoryPgRLSBootstrap.jar
+  InvokeLambdaBootstrapDatabase:
+    Type: Custom::CustomResource
+    # Have to make sure the entire network is still up when you delete
+    # or we won't be able to call back to the CFN response URL
+    DependsOn:
+      - RDSCluster
+      - RDSInstance1
+      - RDSInstance2
+      - JumpBoxSecurityGroup
+      - LambdaBootstrapDatabaseLogs
+      - VPC
+      - SubnetPublicA
+      - SubnetPublicB
+      - SubnetPublicARouteTable
+      - SubnetPublicBRouteTable
+      - RoutePublic
+      - RouteTablePublic
+      - InternetGateway
+      - NatGatewayA
+      - NatGatewayB
+      - RouteNatA
+      - RouteNatB
+      - RouteTableNatA
+      - RouteTableNatB
+      - SubnetPrivateARouteTable
+      - SubnetPrivateBRouteTable
+    Properties:
+      ServiceToken: !GetAtt LambdaBootstrapDatabase.Arn
+      RDSMasterUsername: !Ref DBMasterUsername
+      RDSMasterPassword: saas-factory-pg-rls-owner-pw
+      RDSAppUsername: !Ref DBAppUsername
+      RDSAppPassword: saas-factory-pg-rls-app-pw
+      RDSClusterEndpoint: !GetAtt [RDSCluster, Endpoint.Address]
+      RDSDatabase: !Ref DBName
+  ECSRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: saas-factory-pg-rls
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: saas-factory-pg-rls
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: saas-factory-pg-rls-ecs-task-exec-role
+      Path: '/'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: saas-factory-pg-rls-ecs-task-exec-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+  ECSLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: '/ecs/saas-factory-pg-rls-app'
+      RetentionInDays: 14
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: saas-factory-pg-rls-app-task-role
+      Path: '/'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: saas-factory-pg-rls-app-task-role-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                  - ssm:DeleteParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ListKeys
+                  - kms:ListAliases
+                  - kms:Describe*
+                Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn:
+      - ECSTaskExecutionRole
+      - ECSTaskRole
+      - RDSCluster
+    Properties:
+      Family: saas-factory-pg-rls-app
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      RequiresCompatibilities:
+        - FARGATE
+      Memory: 1024
+      Cpu: 512
+      NetworkMode: awsvpc
+      ContainerDefinitions:
+        - Name: saas-factory-pg-rls-app
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECSRepository}:latest
+          PortMappings:
+            - ContainerPort: 8080
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ECSLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: DB_HOST
+              Value: !GetAtt [RDSCluster, Endpoint.Address]
+            - Name: DB_NAME
+              Value: !Ref DBName
+            - Name: DB_USER
+              Value: !Ref DBAppUsername
+            - Name: DB_PASS
+              Value: saas-factory-pg-rls-app-pw
+            - Name: DB_ADMIN_USER
+              Value: !Ref DBMasterUsername
+            - Name: DB_ADMIN_PASS
+              Value: saas-factory-pg-rls-owner-pw
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC
+    Properties:
+      GroupName: saas-factory-pg-rls-ecs-sg
+      GroupDescription: Access to Fargate Containers
+      VpcId: !Ref VPC
+  ECSSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn:
+      - ECSSecurityGroup
+      - ALBSecurityGroup
+    Properties:
+      GroupId: !Ref ECSSecurityGroup
+      SourceSecurityGroupId: !Ref ALBSecurityGroup
+      IpProtocol: -1
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-ecs-sg
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC
+    Properties:
+      GroupName: saas-factory-pg-rls-alb-sg
+      GroupDescription: Access to the load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+  ECSLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: 30
+      Subnets:
+        - !Ref SubnetPublicA
+        - !Ref SubnetPublicB    
+      SecurityGroups: [!Ref ALBSecurityGroup]    
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: saas-factory-pg-rls-target-group
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: '/health'
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn: ECSLoadBalancer
+    Properties:
+      LoadBalancerArn: !Ref ECSLoadBalancer
+      DefaultActions:
+        - TargetGroupArn: !Ref ALBTargetGroup
+          Type: forward
+      Port: 80
+      Protocol: HTTP
+  ALBRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref ALBTargetGroup
+          Type: forward
+      Conditions:
+        - Field: path-pattern
+          Values: ['*']
+      ListenerArn: !Ref ALBListener
+      Priority: 1
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ECSTaskDefinition
+      - ALBRule
+      - InvokeLambdaCodeBuildStartBuild
+    Properties:
+      ServiceName: saas-factory-pg-rls-app
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref ECSTaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: 1
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+          Subnets:
+            - !Ref SubnetPrivateA
+            - !Ref SubnetPrivateB
+      LoadBalancers:
+        - ContainerName: saas-factory-pg-rls-app
+          ContainerPort: 8080
+          TargetGroupArn: !Ref ALBTargetGroup
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: saas-factory-pg-rls-cfn-codebuild-role
+      Path: '/'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: saas-factory-pg-rls-cfn-codebuild-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub arn:aws:s3:::${CodePipelineBucket}
+                  - !Sub arn:aws:s3:::${CodePipelineBucket}/*
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ECSRepository}
+  ClearS3BucketLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-s3-clear-${AWS::Region}
+      RetentionInDays: 30
+  ClearS3Bucket:
+    Type: AWS::Lambda::Function
+    DependsOn: ClearS3BucketLogs
+    Properties:
+      FunctionName: !Sub saas-factory-pg-rls-s3-clear-${AWS::Region}
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: java8
+      Timeout: 30
+      MemorySize: 256
+      Handler: com.amazon.aws.partners.saasfactory.ClearS3Bucket
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: ClearS3Bucket.jar
+  InvokeClearS3BucketCodePipelineBucket:
+    Type: Custom::CustomResource
+    DependsOn:
+      - ClearS3Bucket
+      - CodePipelineBucket
+      - ClearS3BucketLogs
+    Properties:
+      ServiceToken: !GetAtt ClearS3Bucket.Arn
+      Bucket: !Ref CodePipelineBucket
+  InvokeClearS3BucketCloudTrailBucket:
+    Type: Custom::CustomResource
+    DependsOn:
+      - ClearS3Bucket
+      - CloudTrailBucket
+      - ClearS3BucketLogs
+    Properties:
+      ServiceToken: !GetAtt ClearS3Bucket.Arn
+      Bucket: !Ref CloudTrailBucket
+  CodePipelineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-pipeline-bucket
+  CloudTrailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-cloudtrail-bucket
+  CloudTrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: CloudTrailBucket
+    Properties:
+      Bucket:
+        Ref: CloudTrailBucket
+      PolicyDocument: 
+        Version: 2012-10-17
+        Statement:
+          - Sid: AWSCloudTrailAclCheck20150319
+            Effect: Allow
+            Principal: 
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt CloudTrailBucket.Arn
+          - Sid: AWSCloudTrailWrite20150319
+            Effect: Allow
+            Principal: 
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub arn:aws:s3:::${CloudTrailBucket}/AWSLogs/${AWS::AccountId}/*
+            Condition: 
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+  CloudTrailForCodePipelineTrigger:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: CloudTrailBucketPolicy
+    Properties:
+      TrailName: saas-factory-pg-rls-codebuild-trail
+      S3BucketName: !Ref CloudTrailBucket
+      IsLogging: true
+      EventSelectors:
+        - IncludeManagementEvents: false
+          ReadWriteType: WriteOnly
+          DataResources:
+            - Type: AWS::S3::Object
+              Values:
+                - !Sub arn:aws:s3:::${CodePipelineBucket}/saas-factory-pg-rls-app
+  CloudWatchEventRoleForCloudTrail:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: saas-factory-pg-rls-cfn-cloudwatch-event-role
+      Path: '/'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: saas-factory-pg-rls-cfn-cloudwatch-event-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codepipeline:StartPipelineExecution
+                Resource: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipelineDeploy}
+  CloudWatchEventRuleForCodePipeline:
+    Type: AWS::Events::Rule
+    DependsOn: CloudWatchEventRoleForCloudTrail
+    Properties:
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - 'AWS API Call via CloudTrail'
+        detail:
+          eventSource:
+            - s3.amazonaws.com
+          eventName:
+            - CopyObject
+            - PutObject
+            - CompleteMultipartUpload
+          requestParameters:
+            bucketName:
+              - !Ref CodePipelineBucket
+            key:
+              - saas-factory-pg-rls-app
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipelineDeploy}
+          RoleArn: !GetAtt CloudWatchEventRoleForCloudTrail.Arn
+          Id: saas-factory-pg-rls-app-deploy
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: saas-factory-pg-rls-app
+      Tags:
+        - Key: Name
+          Value: saas-factory-pg-rls-app
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      TimeoutInMinutes: 10
+      Artifacts:
+        Type: S3
+        Location: !Ref CodePipelineBucket
+        Path: '/'
+        Name: saas-factory-pg-rls-app
+        Packaging: ZIP
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:2.0
+        Type: LINUX_CONTAINER
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECSRepository}
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                docker: 18
+            pre_build:
+              commands:
+                - $(aws ecr get-login --no-include-email)
+                - mkdir pgrls
+                - cd pgrls
+                - git init
+                - git pull https://github.com/aws-samples/aws-saas-factory-postgresql-rls.git
+                - cd ..
+            build:
+              commands:
+                - cd pgrls/app
+                - mvn clean package -Ddockerfile.repository="${REPOSITORY_URI}"
+                - cd ../../
+            post_build:
+              commands:
+                - docker push "${REPOSITORY_URI}:latest"
+                - printf '[{"name":"saas-factory-pg-rls-app","imageUri":"%s"}]' ${REPOSITORY_URI}:latest > imagedefinitions.json
+          artifacts:
+            files: imagedefinitions.json
+            discard-paths: yes
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    DependsOn: CodePipelineBucket
+    Properties:
+      RoleName: saas-factory-pg-rls-cfn-codepipeline-role
+      Path: '/'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonECS_FullAccess
+      Policies:
+        - PolicyName: saas-factory-pg-rls-cfn-codepipeline-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: '*'
+                Condition:
+                  StringEqualsIfExists:
+                    iamPassedToService:
+                      - ecs-tasks.amazonaws.com
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub arn:aws:s3:::${CodePipelineBucket}
+                  - !Sub arn:aws:s3:::${CodePipelineBucket}/*
+  CodePipelineDeploy:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: saas-factory-pg-rls-app-deploy
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Location: !Ref CodePipelineBucket
+        Type: S3
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: 1
+              Configuration:
+                S3Bucket: !Ref CodePipelineBucket
+                S3ObjectKey: saas-factory-pg-rls-app
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: imgdef
+        - Name: Deploy
+          Actions:
+            - Name: DeployAction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: ECS
+                Version: 1
+              Configuration:
+                ClusterName: !Ref ECSCluster
+                ServiceName: saas-factory-pg-rls-app
+                FileName: imagedefinitions.json
+              InputArtifacts:
+                - Name: imgdef
+  LambdaCodeBuildStartBuildLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-codebuild-start-${AWS::Region}
+      RetentionInDays: 14
+  LambdaCodeBuildStartBuild:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaCodeBuildStartBuildLogs
+    Properties:
+      FunctionName: !Sub saas-factory-pg-rls-codebuild-start-${AWS::Region}
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: java8
+      Timeout: 30
+      MemorySize: 256
+      Handler: com.amazon.aws.partners.saasfactory.CodeBuildStartBuild
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: CodeBuildStartBuild.jar
+  InvokeLambdaCodeBuildStartBuild:
+    Type: Custom::CustomResource
+    DependsOn:
+      - CodeBuildProject
+      - ECSRepository
+      - LambdaCodeBuildStartBuildLogs
+    Properties:
+      ServiceToken: !GetAtt LambdaCodeBuildStartBuild.Arn
+      Project: saas-factory-pg-rls-app
+Outputs:
+  LoadBalancerEndpoint:
+    Description: Load balancer URL
+    Value: !GetAtt ECSLoadBalancer.DNSName
+  RDSClusterEndpoint:
+    Description: RDS Cluster Endpoint
+    Value: !GetAtt [RDSCluster, Endpoint.Address]
+  RDSDatabaseName:
+    Description: Database Name
+    Value: !Ref DBName
+  RDSDatabaseMasterUser:
+    Description: Master Database User
+    Value: !Ref DBMasterUsername
+  RDSDatabaseAppUser:
+    Description: Application Database User
+    Value: !Ref DBAppUsername
+  JumpBoxDNS:
+    Description: Jump Box DNS
+    Value: !GetAtt JumpBox.PublicDnsName
+...
