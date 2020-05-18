@@ -18,7 +18,8 @@ Description: AWS SaaS Factory Multi-Tenant RDBMS Data Isolation Using PostgreSQL
 Parameters:
   KeyPair: 
     Description: Amazon EC2 Key Pair
-    Type: AWS::EC2::KeyPair::KeyName
+    #Type: AWS::EC2::KeyPair::KeyName
+    Type: String
   DBName:
     Description: RDS Database Name
     Type: String
@@ -90,9 +91,8 @@ Metadata:
         default: Do Not Change - Jump Box AMI
       LambdaS3Bucket:
         default: S3 Bucket
-#Mappings:
-#Conditions:
-#Transform:
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPair, '']]
 Resources:
   VPC:
     Type: AWS::EC2::VPC
@@ -254,6 +254,7 @@ Resources:
           Value: saas-factory-pg-rls-ec2-sg
   JumpBox:
     Type: AWS::EC2::Instance
+    Condition: HasKeyPair
     DependsOn: JumpBoxSecurityGroup
     Metadata:
       AWS::CloudFormation::Init:
@@ -952,7 +953,7 @@ Resources:
         Packaging: ZIP
       Environment:
         ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:2.0
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
         Type: LINUX_CONTAINER
         PrivilegedMode: true
         EnvironmentVariables:
@@ -965,7 +966,7 @@ Resources:
           phases:
             install:
               runtime-versions:
-                docker: 18
+                java: corretto11
             pre_build:
               commands:
                 - $(aws ecr get-login --no-include-email)
@@ -1106,6 +1107,7 @@ Outputs:
     Description: Application Database User
     Value: !Ref DBAppUsername
   JumpBoxDNS:
+    Condition: HasKeyPair
     Description: Jump Box DNS
     Value: !GetAtt JumpBox.PublicDnsName
 ...

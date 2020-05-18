@@ -1,13 +1,14 @@
 ## Prerequisites
 This sample is written in Java. You will need a functioning [Java 11](https://aws.amazon.com/corretto/) install and Maven 3.x or newer to compile the Lambda functions used as CloudFormation custom resources.
 You will also need an AWS account that you have administrative access to in order to run the CloudFormation templates.
+
 This sample creates resources in your account that are not included in the AWS free tier. Please clean up
 these resources after experimenting to minimize costs.
 
 ## Getting Started
-1. You will need an EC2 KeyPair in the same Region where you're going to deploy the sample. You can use an existing key pair or create a new one.
+1. You will need an S3 bucket in the same Region where you're going to deploy the sample. You can use an existing bucket or create a new one.
 
-2. You will need an S3 bucket in the same Region where you're going to deploy the sample. You can use an existing bucket or create a new one.
+2. You will optionally need an EC2 KeyPair in the same Region where you're going to deploy the sample. You can use an existing key pair or create a new one. Provide a key pair if you want to interact with the database from the command line using psql.
 
 3. Clone the repository and, using Maven (or your favorite IDE with Maven support), clean and package the 4 lambda projects.
 ```shell
@@ -42,7 +43,7 @@ The template will take roughly 20 minutes to finish deploying.
 
 So what did CloudFormation do? The stack created a new VPC network to isolate this sample from other resources in your account. The database passwords you chose were stored as secure parameters in Systems Manager. It then created an RDS Aurora cluster and ran a Lambda function to bootstrap the database with the tables, RLS policies, and a login user for the app to use. Using CodeBuild, the GitHub repo was cloned and our Spring Boot sample app was built into a Docker image and pushed to the ECR repository. CodeTrail then triggered CodePipeline to deploy the image to ECS which launched it with Fargate.
 
-<p align="center"><img src="architecture.png" alt="Architecture Diagram"/></p>
+<p align="center"><img src="./images/architecture.png" alt="Architecture Diagram"/></p>
 
 A number of resources were created in your account including:
 - A new VPC with an Internet Gateway
