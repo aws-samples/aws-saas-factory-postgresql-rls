@@ -1,3 +1,6 @@
+## Introduction
+Isolating tenant data is a fundamental responsibility for Software as a Service (SaaS) providers. In this sample, produced by the AWS SaaS Factory, we show you one way to implement multi-tenant data isolation using PostgreSQL row level security policies.
+
 ## Prerequisites
 This sample is written in Java. You will need a functioning [Java 11](https://aws.amazon.com/corretto/) install and Maven 3.x or newer to compile the Lambda functions used as CloudFormation custom resources.
 You will also need an AWS account that you have administrative access to in order to run the CloudFormation templates.
