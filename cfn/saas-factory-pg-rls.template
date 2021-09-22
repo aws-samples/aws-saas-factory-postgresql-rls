@@ -1058,8 +1058,7 @@ Resources:
                 - mkdir pgrls
                 - cd pgrls
                 - git init
-                #- git pull https://github.com/aws-samples/aws-saas-factory-postgresql-rls.git
-                - git pull https://github.com/brtrvn/aws-saas-factory-postgresql-rls.git
+                - git pull https://github.com/aws-samples/aws-saas-factory-postgresql-rls.git
                 - cd ../
             build:
               commands:
