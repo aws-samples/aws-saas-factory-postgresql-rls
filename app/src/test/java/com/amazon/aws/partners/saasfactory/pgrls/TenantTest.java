@@ -16,6 +16,9 @@
  */
 package com.amazon.aws.partners.saasfactory.pgrls;
 
+import com.amazon.aws.partners.saasfactory.pgrls.domain.Status;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.Tenant;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.Tier;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -40,8 +43,8 @@ public class TenantTest {
 
 		assertFalse("Any property in addition to ID are not lightweight", heavyweight.isLightweight());
 
-		heavyweight.setStatus(Status.active);
-		heavyweight.setTier(Tier.gold);
+		heavyweight.setStatus(Status.Active);
+		heavyweight.setTier(Tier.Gold);
 		heavyweight.setUsers(new ArrayList<>());
 		assertFalse("Fully hydrated tenants are not lightweight", heavyweight.isLightweight());
 	}

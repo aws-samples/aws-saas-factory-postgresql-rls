@@ -14,29 +14,11 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-package com.amazon.aws.partners.saasfactory.pgrls.service;
-
-import com.amazon.aws.partners.saasfactory.pgrls.domain.Tenant;
-
-import java.util.List;
-import java.util.UUID;
+package com.amazon.aws.partners.saasfactory.pgrls.domain;
 
 /**
- * Simplistic CRUD API
  * @author mibeard
  */
-public interface AdminService {
-
-	public Tenant saveTenant(Tenant tenant);
-
-	public List<Tenant> getTenants();
-
-	public Tenant getTenant(UUID tenantId);
-
-	public void deleteTenant(Tenant tenant);
-
-	public boolean tenantExists(UUID tenantId);
-
-	public boolean userExists(UUID userId);
-
+public enum Tier {
+	Gold, Silver, Bronze;
 }

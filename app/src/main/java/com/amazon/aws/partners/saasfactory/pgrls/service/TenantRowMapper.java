@@ -16,9 +16,9 @@
  */
 package com.amazon.aws.partners.saasfactory.pgrls.service;
 
-import com.amazon.aws.partners.saasfactory.pgrls.Status;
-import com.amazon.aws.partners.saasfactory.pgrls.Tenant;
-import com.amazon.aws.partners.saasfactory.pgrls.Tier;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.Status;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.Tenant;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.Tier;
 import org.springframework.jdbc.core.RowMapper;
 
 import java.sql.ResultSet;

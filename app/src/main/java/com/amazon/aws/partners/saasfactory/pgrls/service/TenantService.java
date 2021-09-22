@@ -16,8 +16,8 @@
  */
 package com.amazon.aws.partners.saasfactory.pgrls.service;
 
-import com.amazon.aws.partners.saasfactory.pgrls.Tenant;
-import com.amazon.aws.partners.saasfactory.pgrls.User;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.Tenant;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.User;
 
 import java.util.List;
 import java.util.UUID;
@@ -38,5 +38,5 @@ public interface TenantService {
 
 	public User getUser(UUID userId);
 
-	public void logout(UUID tenantId);
+	public void deleteUser(User user);
 }

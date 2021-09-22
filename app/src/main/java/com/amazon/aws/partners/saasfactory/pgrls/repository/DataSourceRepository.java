@@ -16,32 +16,32 @@
  */
 package com.amazon.aws.partners.saasfactory.pgrls.repository;
 
-import com.amazon.aws.partners.saasfactory.pgrls.TenantContext;
-import java.util.Map;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.Tenant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Repository;
 
+import java.util.Map;
+
 /**
- * Generates a JDBC connection pool per authenticated tenant. These
- * connections will be constrained by RLS policies to prevent cross
- * tenant data access. In a more complete solution, when a tenant
- * logs out, reference to that tenant in the data source should be
- * removed so the pool of connections can be garbage collected.
+ * Generates a JDBC connection pool per authenticated tenant. These connections will be constrained by
+ * RLS policies to prevent cross tenant data access.
  *
- * Most systems have multiple users per tenant. These connection
- * pools are per tenant, not user.
+ * Most systems have multiple users per tenant. These connection pools are per tenant, not user.
  * @author mibeard
  */
 @Repository
 @Configuration
 public class DataSourceRepository {
 	
-	private static final Logger logger = LoggerFactory.getLogger(DataSourceRepository.class);
+	private static final Logger LOGGER = LoggerFactory.getLogger(DataSourceRepository.class);
 
 	// See DataSourcePropertiesConfiguration
 	@Autowired
@@ -55,32 +55,35 @@ public class DataSourceRepository {
 	private final TenantAwareDataSource dataSource = new TenantAwareDataSource();
 
 	public javax.sql.DataSource dataSource() {
-		Object currentTenant = TenantContext.getTenant();
+		Object currentTenant = null;
+		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+		if (authentication !=  null && !(authentication instanceof AnonymousAuthenticationToken)) {
+			currentTenant = ((Tenant) authentication.getPrincipal()).getId();
+		}
 		if (currentTenant == null) {
-			throw new RuntimeException("No current tenant");
+			throw new RuntimeException("Can't return data source. No authenticated tenant.");
 		}
 
 		// Each tenant gets its own Hikari connection pool
 		if (!dataSourceTargets.containsKey(currentTenant) || dataSourceTargets.get(currentTenant) == null) {
+			LOGGER.info("Creating new connection pool for tenant {}", currentTenant);
 			dataSourceTargets.put(currentTenant, dataSourceProperties.initializeDataSourceBuilder().build());
 		}
 
-		// Tell our data source router where to find all the keys
-		// we want it to map pools to
+		// Tell our data source router where to find all the keys we want it to map pools to
 		dataSource.setTargetDataSources(dataSourceTargets);
 
-		// Tell Spring we're done configuring the data source so
-		// it can initialize the routing functionality. We must call
-		// this each time, because internally AbstractRoutingDataSource
-		// is keeping a map of resolved data sources per key and we
-		// may have just added a new tenant to our list of targets or
-		// we may have removed (logged out) a tenant and want to cleanup.
+		// Tell Spring we're done configuring the data source so it can initialize the routing
+		// functionality. We must call this each time, because internally AbstractRoutingDataSource
+		// is keeping a map of resolved data sources per key and we may have just added a new
+		// tenant to our list of targets or we may have removed (logged out) a tenant and want
+		// to cleanup.
 		dataSource.afterPropertiesSet();
 
-//		logger.info("Returning dataSource with targets:");
-//		dataSourceTargets.keySet().forEach((key) -> {
-//			logger.info(String.valueOf(key));
-//		});
+		LOGGER.info("Returning dataSource with targets:");
+		dataSourceTargets.keySet().forEach((key) -> {
+			LOGGER.info(String.valueOf(key));
+		});
 		
 		return dataSource;
 	}

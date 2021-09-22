@@ -13,6 +13,5 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-# Application listener to replace the spring.datasource.password environment
-# variable with the decrypted parameter store value
-org.springframework.boot.env.EnvironmentPostProcessor=com.amazon.aws.partners.saasfactory.pgrls.configuration.SecretsManagerConfiguration
+# Application listener to bootstrap the database before the application runs
+org.springframework.context.ApplicationListener=com.amazon.aws.partners.saasfactory.pgrls.configuration.DatabaseInit
