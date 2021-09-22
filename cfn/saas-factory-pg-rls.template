@@ -54,7 +54,7 @@ Parameters:
   RDSEngineVersion:
     Description: PostgreSQL version
     Type: String
-    Default: 13.3
+    Default: 12
   AMI:
     Description: EC2 Image ID for the Jump Box (don't change)
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -1063,7 +1063,7 @@ Resources:
                 - cd ../../
             post_build:
               commands:
-                - $(aws ecr get-login --no-include-email --region $AWS_REGION | awk '{print $6}' | docker login -u AWS --password-stdin $REPOSITORY_URI
+                - aws ecr get-login --no-include-email --region $AWS_REGION | awk '{print $6}' | docker login -u AWS --password-stdin $REPOSITORY_URI
                 - docker push "${REPOSITORY_URI}:latest"
                 - printf '[{"name":"saas-factory-pg-rls-app","imageUri":"%s"}]' ${REPOSITORY_URI}:latest > imagedefinitions.json
           artifacts:
