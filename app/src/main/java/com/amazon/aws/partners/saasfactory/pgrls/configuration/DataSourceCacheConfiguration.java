@@ -18,16 +18,16 @@ package com.amazon.aws.partners.saasfactory.pgrls.configuration;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+
+import com.amazon.aws.partners.saasfactory.pgrls.repository.DataSourceRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
  * Creates a singleton (shared Spring application wide) cache of active
- * tenants and their data source connection pools. In a more complete
- * solution, when a tenant logs out, they should be removed from this
- * cache so we can clean up their JDBC connection pool.
+ * tenants and their data source connection pools.
  * @author mibeard
- * @see DataSourceRepository.java
+ * @see DataSourceRepository
  */
 @Configuration
 public class DataSourceCacheConfiguration {

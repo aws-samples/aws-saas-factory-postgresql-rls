@@ -14,29 +14,66 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-package com.amazon.aws.partners.saasfactory.pgrls.service;
+package com.amazon.aws.partners.saasfactory.pgrls.domain;
 
-import com.amazon.aws.partners.saasfactory.pgrls.domain.Tenant;
-
-import java.util.List;
 import java.util.UUID;
 
 /**
- * Simplistic CRUD API
  * @author mibeard
  */
-public interface AdminService {
+public class User {
 
-	public Tenant saveTenant(Tenant tenant);
+	private UUID id;
+	private Tenant tenant;
+	private String email;
+	private String givenName;
+	private String familyName;
 
-	public List<Tenant> getTenants();
+	public User() {
+		this(null);
+	}
 
-	public Tenant getTenant(UUID tenantId);
+	public User(UUID id) {
+		this.id = id;
+	}
 
-	public void deleteTenant(Tenant tenant);
+	public UUID getId() {
+		return id;
+	}
 
-	public boolean tenantExists(UUID tenantId);
+	public void setId(UUID id) {
+		this.id = id;
+	}
 
-	public boolean userExists(UUID userId);
+	public Tenant getTenant() {
+		return tenant;
+	}
 
+	public void setTenant(Tenant tenant) {
+		this.tenant = tenant;
+	}
+
+	public String getEmail() {
+		return email;
+	}
+
+	public void setEmail(String email) {
+		this.email = email;
+	}
+
+	public String getGivenName() {
+		return givenName;
+	}
+
+	public void setGivenName(String givenName) {
+		this.givenName = givenName;
+	}
+
+	public String getFamilyName() {
+		return familyName;
+	}
+
+	public void setFamilyName(String familyName) {
+		this.familyName = familyName;
+	}
 }

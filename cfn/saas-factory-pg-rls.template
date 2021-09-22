@@ -13,11 +13,11 @@
 # HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-AWSTemplateFormatVersion: 2010-09-09
+AWSTemplateFormatVersion: '2010-09-09'
 Description: AWS SaaS Factory Multi-Tenant RDBMS Data Isolation Using PostgreSQL Row Level Security
 Parameters:
   KeyPair: 
-    Description: Amazon EC2 Key Pair
+    Description: Amazon EC2 Key Pair for a Jump Box with access to the database
     #Type: AWS::EC2::KeyPair::KeyName
     Type: String
   DBName:
@@ -47,13 +47,18 @@ Parameters:
     MinLength: 8
     AllowedPattern: ^[a-zA-Z0-9/@"' ]{8,}$
     ConstraintDescription: RDS passwords must be at least 8 characters in length
+  RDSInstanceType:
+    Description: RDS Instance Type
+    Type: String
+    Default: db.t2.micro
+  RDSEngineVersion:
+    Description: PostgreSQL version
+    Type: String
+    Default: 12
   AMI:
-    Description: EC2 Image ID (don't change)
+    Description: EC2 Image ID for the Jump Box (don't change)
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
-  LambdaS3Bucket:
-    Description: S3 bucket where you uploaded the Lambda code packages
-    Type: String
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -63,12 +68,10 @@ Metadata:
           - KeyPair
           - AMI
       - Label:
-          default: CloudFormation Helpers
-        Parameters:
-          - LambdaS3Bucket
-      - Label:
           default: Database Configuration
         Parameters:
+          - RDSInstanceType
+          - RDSEngineVersion
           - DBName
           - DBMasterUsername
           - DBMasterPassword
@@ -89,8 +92,6 @@ Metadata:
         default: RDS Application Password
       AMI:
         default: Do Not Change - Jump Box AMI
-      LambdaS3Bucket:
-        default: S3 Bucket
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPair, '']]
 Resources:
@@ -299,7 +300,7 @@ Resources:
       RoleName: saas-factory-pg-rls-cfn-lambda-role
       Path: '/'
       AssumeRolePolicyDocument:
-        Version: 2012-10-17
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -310,7 +311,7 @@ Resources:
       Policies:
         - PolicyName: saas-factory-pg-rls-cfn-lambda-policy
           PolicyDocument:
-            Version: 2012-10-17
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
@@ -351,7 +352,6 @@ Resources:
                   - s3:ListBucketVersions
                   - s3:GetBucketVersioning
                 Resource:
-                  - !Sub arn:aws:s3:::${LambdaS3Bucket}
                   - !Sub arn:aws:s3:::${CodePipelineBucket}
                   - !Sub arn:aws:s3:::${CloudTrailBucket}
               - Effect: Allow
@@ -360,27 +360,63 @@ Resources:
                   - s3:DeleteObject
                   - s3:DeleteObjectVersion
                 Resource:
-                  - !Sub arn:aws:s3:::${LambdaS3Bucket}/*
                   - !Sub arn:aws:s3:::${CodePipelineBucket}/*
                   - !Sub arn:aws:s3:::${CloudTrailBucket}/*
+              - Effect: Allow
+                Action:
+                  - ecr:DescribeImages
+                  - ecr:BatchDeleteImage
+                Resource:
+                  - !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/saas-factory-pg-rls
   LambdaSSMPutParamSecureLogs:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-ssm-secure-${AWS::Region}
+      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-ssm-secure
       RetentionInDays: 14
   LambdaSSMPutParamSecure:
     Type: AWS::Lambda::Function
     DependsOn: LambdaSSMPutParamSecureLogs
     Properties:
-      FunctionName: !Sub saas-factory-pg-rls-ssm-secure-${AWS::Region}
+      FunctionName: !Sub saas-factory-pg-rls-ssm-secure
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: java8
-      Timeout: 30
+      Runtime: python3.7
+      Timeout: 300
       MemorySize: 256
-      Handler: com.amazon.aws.partners.saasfactory.SSMPutParamSecure
+      Handler: index.lambda_handler
       Code:
-        S3Bucket: !Ref LambdaS3Bucket
-        S3Key: SSMPutParamSecure.jar
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          from botocore.exceptions import ClientError
+          
+          def lambda_handler(event, context):
+              #print(json.dumps(event, default=str))
+              ssm = boto3.client('ssm')
+              parameter_name = event['ResourceProperties']['Name']
+              parameter_value = event['ResourceProperties']['Value']
+              
+              if event['RequestType'] in ['Create', 'Update']:
+                  try:
+                      put_response = ssm.put_parameter(Name=parameter_name, Value=parameter_value, Type='SecureString', Overwrite=True)
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Version": put_response['Version']})
+                  except ClientError as ssm_error:
+                      print("ssm error %s" % str(ssm_error))
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {"Reason": str(ssm_error)})
+                      raise
+              elif event['RequestType'] == 'Delete':
+                  try:
+                      delete_response = ssm.delete_parameter(Name=parameter_name)
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  except ssm.exceptions.ParameterNotFound as not_found:
+                      # Ignore parameter not found
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  except ClientError as ssm_error:
+                      print("ssm error %s" % str(ssm_error))
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {"Reason": str(ssm_error)})
+                      raise
+              else:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Reason": "Unknown RequestType %s" % event['RequestType']})
   InvokeLambdaSSMPutParamSecure:
     Type: Custom::CustomResource
     DependsOn: LambdaSSMPutParamSecureLogs
@@ -395,6 +431,65 @@ Resources:
       ServiceToken: !GetAtt LambdaSSMPutParamSecure.Arn
       Name: saas-factory-pg-rls-app-pw
       Value: !Ref DBAppPassword
+  LambdaClearEcrImagesLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-clear-ecr
+      RetentionInDays: 7
+  LambdaClearEcrImages:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaClearEcrImagesLogs
+    Properties:
+      FunctionName: !Sub saas-factory-pg-rls-clear-ecr
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.7
+      Timeout: 300
+      MemorySize: 512
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          from botocore.exceptions import ClientError
+          
+          def lambda_handler(event, context):
+              print(json.dumps(event, default=str))
+              if event['RequestType'] in ['Create', 'Update']:
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              elif event['RequestType'] == 'Delete':
+                  ecr = boto3.client('ecr')
+                  repo = event['ResourceProperties']['Repository']
+                  try:
+                      images = []
+                      token = None
+                      while True:
+                          if not token:
+                              images_response = ecr.describe_images(repositoryName=repo, maxResults=1000)
+                          else:
+                              images_response = ecr.describe_images(repositoryName=repo, nextToken=token, maxResults=1000)
+                          token = images_response['nextToken'] if 'nextToken' in images_response else ''
+                          if 'imageDetails' in images_response:
+                              for image_detail in images_response['imageDetails']:
+                                  images.append({"imageDigest": image_detail['imageDigest']})
+                          if not token:
+                              break
+                      print("Deleting %d images from repo %s" % (len(images), repo))
+                      if len(images) > 0:
+                          delete_response = ecr.batch_delete_image(repositoryName=repo, imageIds=images)
+                          if 'failures' in delete_response and len(delete_response['failures']) > 0:
+                              for fail in delete_response['failures']:
+                                  print("Failed to delete image %s %s in repo %s" % (fail['imageId']['imageDigest'], fail['failureReason'], repo))
+                              cfnresponse.send(event, context, cfnresponse.FAILED, {"Reason": "ecr:BatchDeleteImage failed"})
+                          else:
+                              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      else:
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  except ClientError as ecr_error:
+                      print("ecr error %s" % str(ecr_error))
+                      raise
+              else:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Reason": "Unknown RequestType %s" % event['RequestType']})
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -429,29 +524,21 @@ Resources:
       SubnetIds:
         - !Ref SubnetPrivateA
         - !Ref SubnetPrivateB
-  RDSClusterParameterGroup: 
-    Type: AWS::RDS::DBClusterParameterGroup
-    Properties:
-      Family: aurora-postgresql10
-      Description: saas-factory-pg-rls-rds-cluster-parameters
-      Parameters:
-        ssl: true
-  RDSCluster:
-    Type: AWS::RDS::DBCluster
-    DependsOn: RDSClusterParameterGroup
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DependsOn: RDSSecurityGroup
     DeletionPolicy: Delete
     Properties:
-      DBSubnetGroupName: !Ref RDSSubnetGroup
-      AvailabilityZones: [ !Select [0, !GetAZs ''], !Select [1, !GetAZs ''] ]
-      Engine: aurora-postgresql
-      #EngineMode: serverless
-      EngineVersion: 10.11
-      DBClusterParameterGroupName: !Ref RDSClusterParameterGroup
-      Port: 5432
-      VpcSecurityGroupIds:
+      DBInstanceIdentifier: saas-factory-pg-rls-rds-instance
+      DBInstanceClass: !Ref RDSInstanceType
+      VPCSecurityGroups:
         - !Ref RDSSecurityGroup
-      DBClusterIdentifier: saas-factory-pg-rls-rds-cluster
-      DatabaseName: !Ref DBName
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      DeleteAutomatedBackups: true
+      MultiAZ: false
+      Engine: postgres
+      EngineVersion: !Ref RDSEngineVersion
+      DBName: !Ref DBName
       MasterUsername: !Ref DBMasterUsername
       MasterUserPassword:
         Fn::Join:
@@ -459,88 +546,17 @@ Resources:
           - - '{{resolve:ssm-secure:saas-factory-pg-rls-owner-pw:'
             - !GetAtt InvokeLambdaSSMPutParamSecure.Version
             - '}}'
-  RDSInstance1:
-    Type: AWS::RDS::DBInstance
-    Properties:
-      DBClusterIdentifier: !Ref RDSCluster
-      PubliclyAccessible: false
-      AvailabilityZone: !Select [0, !GetAZs '']
-      DBInstanceClass: db.r5.large
-      Engine: aurora-postgresql
-      DBInstanceIdentifier: saas-factory-pg-rls-rds-instance1
-  RDSInstance2:
-    Type: AWS::RDS::DBInstance
-    Properties:
-      DBClusterIdentifier: !Ref RDSCluster
-      PubliclyAccessible: false
-      AvailabilityZone: !Select [1, !GetAZs '']
-      DBInstanceClass: db.r5.large
-      Engine: aurora-postgresql
-      DBInstanceIdentifier: saas-factory-pg-rls-rds-instance2
-  LambdaBootstrapDatabaseLogs:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-rds-bootstrap-${AWS::Region}
-      RetentionInDays: 14
-  LambdaBootstrapDatabase:
-    Type: AWS::Lambda::Function
-    DependsOn:
-      - JumpBoxSecurityGroup
-      - LambdaBootstrapDatabaseLogs
-    Properties:
-      FunctionName: !Sub saas-factory-pg-rls-rds-bootstrap-${AWS::Region}
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: java8
-      Timeout: 300
-      MemorySize: 256
-      VpcConfig: # Has to be a VPC Lambda because we're talking to RDS
-        SecurityGroupIds:
-          - !Ref JumpBoxSecurityGroup
-        SubnetIds:
-          - !Ref SubnetPrivateA
-          - !Ref SubnetPrivateB
-      Handler: com.amazon.aws.partners.saasfactory.SaaSFactoryPgRLSBootstrap
-      Code:
-        S3Bucket: !Ref LambdaS3Bucket
-        S3Key: SaaSFactoryPgRLSBootstrap.jar
-  InvokeLambdaBootstrapDatabase:
-    Type: Custom::CustomResource
-    # Have to make sure the entire network is still up when you delete
-    # or we won't be able to call back to the CFN response URL
-    DependsOn:
-      - RDSCluster
-      - RDSInstance1
-      - RDSInstance2
-      - JumpBoxSecurityGroup
-      - LambdaBootstrapDatabaseLogs
-      - VPC
-      - SubnetPublicA
-      - SubnetPublicB
-      - SubnetPublicARouteTable
-      - SubnetPublicBRouteTable
-      - RoutePublic
-      - RouteTablePublic
-      - InternetGateway
-      - NatGatewayA
-      - NatGatewayB
-      - RouteNatA
-      - RouteNatB
-      - RouteTableNatA
-      - RouteTableNatB
-      - SubnetPrivateARouteTable
-      - SubnetPrivateBRouteTable
-    Properties:
-      ServiceToken: !GetAtt LambdaBootstrapDatabase.Arn
-      RDSMasterUsername: !Ref DBMasterUsername
-      RDSMasterPassword: saas-factory-pg-rls-owner-pw
-      RDSAppUsername: !Ref DBAppUsername
-      RDSAppPassword: saas-factory-pg-rls-app-pw
-      RDSClusterEndpoint: !GetAtt [RDSCluster, Endpoint.Address]
-      RDSDatabase: !Ref DBName
+      AllocatedStorage: 20
+      StorageType: gp2
   ECSRepository:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: saas-factory-pg-rls
+  InvokeClearEcrRepoImages:
+    Type: Custom::CustomResource
+    Properties:
+      ServiceToken: !GetAtt LambdaClearEcrImages.Arn
+      Repository: !Ref ECSRepository
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -551,7 +567,7 @@ Resources:
       RoleName: saas-factory-pg-rls-ecs-task-exec-role
       Path: '/'
       AssumeRolePolicyDocument:
-        Version: 2012-10-17
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -562,17 +578,35 @@ Resources:
       Policies:
         - PolicyName: saas-factory-pg-rls-ecs-task-exec-policy
           PolicyDocument:
-            Version: 2012-10-17
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - ecr:GetAuthorizationToken
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*:log-stream:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
+              - Effect: Allow
+                Action:
                   - ecr:BatchCheckLayerAvailability
                   - ecr:GetDownloadUrlForLayer
                   - ecr:BatchGetImage
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ECSRepository}
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-owner-pw
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-app-pw
   ECSLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -584,7 +618,7 @@ Resources:
       RoleName: saas-factory-pg-rls-app-task-role
       Path: '/'
       AssumeRolePolicyDocument:
-        Version: 2012-10-17
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -592,31 +626,8 @@ Resources:
                 - ecs-tasks.amazonaws.com
             Action:
               - sts:AssumeRole
-      Policies:
-        - PolicyName: saas-factory-pg-rls-app-task-role-policy
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:PutParameter
-                  - ssm:GetParameter
-                  - ssm:DeleteParameter
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:*
-              - Effect: Allow
-                Action:
-                  - kms:Encrypt
-                  - kms:Decrypt
-                  - kms:ListKeys
-                  - kms:ListAliases
-                  - kms:Describe*
-                Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
   ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
-    DependsOn:
-      - ECSTaskExecutionRole
-      - ECSTaskRole
-      - RDSCluster
     Properties:
       Family: saas-factory-pg-rls-app
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
@@ -641,17 +652,18 @@ Resources:
             - Name: AWS_REGION
               Value: !Ref AWS::Region
             - Name: DB_HOST
-              Value: !GetAtt [RDSCluster, Endpoint.Address]
+              Value: !GetAtt RDSInstance.Endpoint.Address
             - Name: DB_NAME
               Value: !Ref DBName
             - Name: DB_USER
               Value: !Ref DBAppUsername
-            - Name: DB_PASS
-              Value: saas-factory-pg-rls-app-pw
             - Name: DB_ADMIN_USER
               Value: !Ref DBMasterUsername
+          Secrets:
             - Name: DB_ADMIN_PASS
-              Value: saas-factory-pg-rls-owner-pw
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-owner-pw
+            - Name: DB_PASS
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-app-pw
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     DependsOn: VPC
@@ -708,6 +720,13 @@ Resources:
       Protocol: HTTP
       TargetType: ip
       VpcId: !Ref VPC
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '86400'
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     DependsOn: ECSLoadBalancer
@@ -758,7 +777,7 @@ Resources:
       RoleName: saas-factory-pg-rls-cfn-codebuild-role
       Path: '/'
       AssumeRolePolicyDocument:
-        Version: 2012-10-17
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -769,7 +788,7 @@ Resources:
       Policies:
         - PolicyName: saas-factory-pg-rls-cfn-codebuild-policy
           PolicyDocument:
-            Version: 2012-10-17
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
@@ -803,21 +822,88 @@ Resources:
   ClearS3BucketLogs:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-s3-clear-${AWS::Region}
+      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-s3-clear
       RetentionInDays: 30
   ClearS3Bucket:
     Type: AWS::Lambda::Function
     DependsOn: ClearS3BucketLogs
     Properties:
-      FunctionName: !Sub saas-factory-pg-rls-s3-clear-${AWS::Region}
+      FunctionName: !Sub saas-factory-pg-rls-s3-clear
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: java8
-      Timeout: 30
-      MemorySize: 256
-      Handler: com.amazon.aws.partners.saasfactory.ClearS3Bucket
+      Runtime: python3.7
+      Timeout: 900
+      MemorySize: 512
+      Handler: index.lambda_handler
       Code:
-        S3Bucket: !Ref LambdaS3Bucket
-        S3Key: ClearS3Bucket.jar
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          from botocore.exceptions import ClientError
+          
+          def lambda_handler(event, context):
+              print(json.dumps(event, default=str))
+              if event['RequestType'] in ['Create', 'Update']:
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              elif event['RequestType'] == 'Delete':
+                  s3 = boto3.client('s3')
+                  bucket = event['ResourceProperties']['Bucket']
+                  objects_to_delete = []
+                  try:
+                      versioning_response = s3.get_bucket_versioning(Bucket=bucket)
+                      print(json.dumps(versioning_response, default=str))
+                      if 'Status' in versioning_response and versioning_response['Status'] in ['Enabled', 'Suspended']:
+                          print("Bucket %s is versioned (%s)" % (bucket, versioning_response['Status']))
+                          key_token = ''
+                          version_token = ''
+                          while True:
+                              if not version_token:
+                                  list_response = s3.list_object_versions(Bucket=bucket, KeyMarker=key_token)
+                              else:
+                                  list_response = s3.list_object_versions(Bucket=bucket, KeyMarker=key_token, VersionIdMarker=version_token)
+                              key_token = list_response['NextKeyMarker'] if 'NextKeyMarker' in list_response else ''
+                              version_token = list_response['NextVersionIdMarker'] if 'NextVersionIdMarker' in list_response else ''
+                              if 'Versions' in list_response:
+                                  for s3_object in list_response['Versions']:
+                                      objects_to_delete.append({'Key': s3_object['Key'], 'VersionId': s3_object['VersionId']})
+                              if not list_response['IsTruncated']:
+                                  break
+                      else:
+                          print("Bucket %s is not versioned" % bucket)
+                          token = ''
+                          while True:
+                              if not token:
+                                  list_response = s3.list_objects_v2(Bucket=bucket)
+                              else:
+                                  list_response = s3.list_objects_v2(Bucket=bucket, ContinuationToken=token)
+                              token = list_response['NextContinuationToken'] if 'NextContinuationToken' in list_response else ''
+                              if 'Contents' in list_response:
+                                  for s3_object in list_response['Contents']:
+                                      objects_to_delete.append({'Key': s3_object['Key']})
+                              if not list_response['IsTruncated']:
+                                  break
+                      if len(objects_to_delete) > 0:
+                          print("Deleting %d objects" % len(objects_to_delete))
+                          max_batch_size = 1000
+                          batch_start = 0
+                          batch_end = 0
+                          while batch_end < len(objects_to_delete):
+                              batch_start = batch_end
+                              batch_end += max_batch_size
+                              if (batch_end > len(objects_to_delete)):
+                                  batch_end = len(objects_to_delete)
+                              delete_response = s3.delete_objects(Bucket=bucket, Delete={'Objects': objects_to_delete[batch_start:batch_end]})
+                              print("Cleaned up %d objects in bucket %s" % (len(delete_response['Deleted']), bucket))
+                      else:
+                          print("Bucket %s is empty. Nothing to clean up." % bucket)
+                      
+                      # Tell CloudFormation we're all done
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  except ClientError as s3_error:
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {"Reason": str(s3_error)})
+                      raise
+              else:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Reason": "Unknown RequestType %s" % event['RequestType']})
   InvokeClearS3BucketCodePipelineBucket:
     Type: Custom::CustomResource
     DependsOn:
@@ -857,7 +943,7 @@ Resources:
       Bucket:
         Ref: CloudTrailBucket
       PolicyDocument: 
-        Version: 2012-10-17
+        Version: '2012-10-17'
         Statement:
           - Sid: AWSCloudTrailAclCheck20150319
             Effect: Allow
@@ -894,7 +980,7 @@ Resources:
       RoleName: saas-factory-pg-rls-cfn-cloudwatch-event-role
       Path: '/'
       AssumeRolePolicyDocument:
-        Version: 2012-10-17
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -905,7 +991,7 @@ Resources:
       Policies:
         - PolicyName: saas-factory-pg-rls-cfn-cloudwatch-event-policy
           PolicyDocument:
-            Version: 2012-10-17
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
@@ -969,19 +1055,21 @@ Resources:
                 java: corretto11
             pre_build:
               commands:
-                - $(aws ecr get-login --no-include-email)
                 - mkdir pgrls
                 - cd pgrls
                 - git init
                 - git pull https://github.com/aws-samples/aws-saas-factory-postgresql-rls.git
-                - cd ..
+                - cd ../
             build:
               commands:
                 - cd pgrls/app
-                - mvn clean package -Ddockerfile.repository="${REPOSITORY_URI}"
+                - mvn clean package
+                - docker image build -t pgrls -f Dockerfile .
+                - docker tag pgrls:latest "${REPOSITORY_URI}:latest"
                 - cd ../../
             post_build:
               commands:
+                - aws ecr get-login --no-include-email --region $AWS_REGION | awk '{print $6}' | docker login -u AWS --password-stdin $REPOSITORY_URI
                 - docker push "${REPOSITORY_URI}:latest"
                 - printf '[{"name":"saas-factory-pg-rls-app","imageUri":"%s"}]' ${REPOSITORY_URI}:latest > imagedefinitions.json
           artifacts:
@@ -994,7 +1082,7 @@ Resources:
       RoleName: saas-factory-pg-rls-cfn-codepipeline-role
       Path: '/'
       AssumeRolePolicyDocument:
-        Version: 2012-10-17
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -1007,7 +1095,7 @@ Resources:
       Policies:
         - PolicyName: saas-factory-pg-rls-cfn-codepipeline-policy
           PolicyDocument:
-            Version: 2012-10-17
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
@@ -1066,21 +1154,39 @@ Resources:
   LambdaCodeBuildStartBuildLogs:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-codebuild-start-${AWS::Region}
+      LogGroupName: !Sub /aws/lambda/saas-factory-pg-rls-codebuild-start
       RetentionInDays: 14
   LambdaCodeBuildStartBuild:
     Type: AWS::Lambda::Function
     DependsOn: LambdaCodeBuildStartBuildLogs
     Properties:
-      FunctionName: !Sub saas-factory-pg-rls-codebuild-start-${AWS::Region}
+      FunctionName: !Sub saas-factory-pg-rls-codebuild-start
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: java8
-      Timeout: 30
-      MemorySize: 256
-      Handler: com.amazon.aws.partners.saasfactory.CodeBuildStartBuild
+      Runtime: python3.7
+      Timeout: 60
+      MemorySize: 512
+      Handler: index.lambda_handler
       Code:
-        S3Bucket: !Ref LambdaS3Bucket
-        S3Key: CodeBuildStartBuild.jar
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          from botocore.exceptions import ClientError
+          
+          def lambda_handler(event, context):
+              print(json.dumps(event, default=str))
+              if event['RequestType'] == 'Create':
+                  try:
+                      codebuild = boto3.client('codebuild')
+                      response = codebuild.start_build(projectName = event['ResourceProperties']['Project'])
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {"BuildStatus": response['build']['buildStatus']})
+                  except ClientError as codebuild_error:
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {"Reason": str(codebuild_error)})
+                      raise
+              elif event['RequestType'] in ['Update', 'Delete']:
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              else:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Reason": "Unknown RequestType %s" % event['RequestType']})
   InvokeLambdaCodeBuildStartBuild:
     Type: Custom::CustomResource
     DependsOn:
@@ -1094,9 +1200,9 @@ Outputs:
   LoadBalancerEndpoint:
     Description: Load balancer URL
     Value: !GetAtt ECSLoadBalancer.DNSName
-  RDSClusterEndpoint:
-    Description: RDS Cluster Endpoint
-    Value: !GetAtt [RDSCluster, Endpoint.Address]
+  RDSEndpoint:
+    Description: RDS Endpoint
+    Value: !GetAtt RDSInstance.Endpoint.Address
   RDSDatabaseName:
     Description: Database Name
     Value: !Ref DBName

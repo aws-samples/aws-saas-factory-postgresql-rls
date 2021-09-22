@@ -14,37 +14,43 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-package com.amazon.aws.partners.saasfactory.pgrls.repository;
+package com.amazon.aws.partners.saasfactory.pgrls.controller;
 
+import com.amazon.aws.partners.saasfactory.pgrls.service.AdminService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.stereotype.Repository;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
 
-import javax.sql.DataSource;
+@Controller
+public class RootController {
 
-/**
- * Generates JDBC data source pool using the table OWNER credentials.
- * This connection will not be bound by RLS policies in order to
- * perform INSERTs and other actions regardless of the current
- * tenant context.
- * @author mibeard
- */
-@Repository
-@Configuration
-public class AdminDataSourceRepository {
+    private final static Logger LOGGER = LoggerFactory.getLogger(RootController.class);
 
-	private static final Logger LOGGER = LoggerFactory.getLogger(AdminDataSourceRepository.class);
+    @Autowired
+    private AdminService adminService;
 
-	// See DataSourcePropertiesConfiguration
-	@Autowired
-	@Qualifier("adminDataSourceProperties")
-	DataSourceProperties adminDataSourceProperties;
+    @GetMapping({"/", "/index.html"})
+    public String index(Model model) {
+        return "index";
+    }
 
-	public DataSource dataSource() {
-		return adminDataSourceProperties.initializeDataSourceBuilder().build();
-	}
+    /**
+     * Endpoint for the ALB to call. Simply returns an HTTP 200.
+     * @return
+     */
+    @GetMapping("/health")
+    public ResponseEntity health() {
+        return ResponseEntity.ok().build();
+    }
+
+    @RequestMapping("/login")
+    public String login(Model model) {
+        model.addAttribute("tenants", adminService.getTenants());
+        return "login";
+    }
 }

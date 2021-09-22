@@ -16,72 +16,76 @@
  */
 package com.amazon.aws.partners.saasfactory.pgrls.service;
 
-import com.amazon.aws.partners.saasfactory.pgrls.Tenant;
-import com.amazon.aws.partners.saasfactory.pgrls.TenantContext;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.Tenant;
 import com.amazon.aws.partners.saasfactory.pgrls.UnauthorizedException;
-import com.amazon.aws.partners.saasfactory.pgrls.User;
+import com.amazon.aws.partners.saasfactory.pgrls.domain.User;
 import com.amazon.aws.partners.saasfactory.pgrls.repository.DataSourceRepository;
+import com.amazon.aws.partners.saasfactory.pgrls.repository.UniqueRecordException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * In a more complete solution, you'd break up your business logic
- * and error handling here and move the data access code to another
- * set of interfaces.
+ * In a more complete solution, you'd break up your business logic and error handling here and move
+ * the data access code to another set of interfaces.
  * @author mibeard
  */
 @Service
 public class TenantServiceImpl implements TenantService {
 
-	private static final Logger logger = LoggerFactory.getLogger(TenantServiceImpl.class);
+	private static final Logger LOGGER = LoggerFactory.getLogger(TenantServiceImpl.class);
 
 	@Autowired
 	private DataSourceRepository repo;
-	private final JdbcTemplate jdbc = new JdbcTemplate();
 
-	// We can reuse the JDBC Template instance, but we
-	// have to ask the repository for the data source each
-	// time to ensure that the current tenant context is
-	// reflected.
+	// We have to "lazy load" the JDBC Template at runtime because there won't be an authenticated tenant
+	// to map the connection pool to. Because we have a connection pool per-tenant, we have to ask the
+	// repository for the data source each time to ensure that we get a connection back from the pool that
+	// reflects the current tenant context. If you auto wired the JDBC Template, Spring would want to
+	// inject a singleton data source.
+	//
+	// We could choose to reuse a JDBC Template instance. We'd still need to set the data source each time.
+	// The savings would be in the JdbcTemplate not loading the exception translator (which it does when
+	// it's instantiated). This would also expose a class member that could be mistakenly used below.
 	private JdbcTemplate jdbc() {
-		jdbc.setDataSource(repo.dataSource());
+		JdbcTemplate jdbc = new JdbcTemplate(repo.dataSource());
 
-		logger.info("Spring current tenant = " + TenantContext.getTenant());
-		try {
-			Connection conn = jdbc.getDataSource().getConnection();
-			Statement stmt = conn.createStatement();
+		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+		if (authentication != null && !(authentication instanceof AnonymousAuthenticationToken)) {
+			LOGGER.info("Spring current tenant = '{}'", ((Tenant) authentication.getPrincipal()).getId());
+		}
+		try (Connection conn = jdbc.getDataSource().getConnection(); Statement stmt = conn.createStatement()) {
 			ResultSet rs = stmt.executeQuery("SHOW app.current_tenant");
 			rs.next();
 			String connectionCurrentTenant = rs.getString(1);
-			logger.info("Postgres current tenant = " + connectionCurrentTenant);
-		} catch (Exception e) {
+			rs.close();
+			LOGGER.info("PostgreSQL current tenant = '{}' on {}", connectionCurrentTenant, jdbc.getDataSource().toString());
+		} catch (SQLException e) {
+			LOGGER.error("Error fetching PostgreSQL session variable app.current_tenant", e);
 		}
 
 		return jdbc;
 	}
 
-	/**
-	 * Notice that there is nothing special about these queries.
-	 * RLS protection is transparent to us because it's managed
-	 * in the connection.
-	 * @param tenantId
-	 * @return
-	 */
 	@Override
 	public Tenant getTenant(UUID tenantId) {
 		Tenant tenant = null;
@@ -119,6 +123,12 @@ public class TenantServiceImpl implements TenantService {
 		return users;
 	}
 
+	/**
+	 * Notice that there is nothing special about these queries. You don't have to add tenant_id = ? to your SQL.
+	 * RLS protection is transparent to us because it's managed in the connection.
+	 * @param userId
+	 * @return the user with id userId
+	 */
 	@Override
 	public User getUser(UUID userId) {
 		User user = null;
@@ -134,6 +144,16 @@ public class TenantServiceImpl implements TenantService {
 
 	@Override
 	public User saveUser(User user) {
+		User saved = null;
+		if (user.getId() == null) {
+			saved = insertUser(user);
+		} else {
+			saved = updateUser(user);
+		}
+		return saved;
+	}
+
+	protected User insertUser(User user) {
 		NamedParameterJdbcTemplate jdbc = new NamedParameterJdbcTemplate(jdbc());
 		GeneratedKeyHolder generated = new GeneratedKeyHolder();
 		StringBuilder sql = new StringBuilder("INSERT INTO tenant_user (tenant_id, email, given_name, family_name) VALUES (:tenant_id, :email, :given_name, :family_name)");
@@ -158,11 +178,39 @@ public class TenantServiceImpl implements TenantService {
 			} else {
 				throw e;
 			}
+		} catch (DataAccessException e) {
+			if (e.getRootCause() instanceof SQLException) {
+				SQLException sqlError = (SQLException) e.getRootCause();
+				if ("23505".equals(sqlError.getSQLState())) {
+					throw new UniqueRecordException(user.getEmail() + " already exists", e);
+				} else {
+					throw e;
+				}
+			} else {
+				throw e;
+			}
 		}
 		return user;
 	}
 
-	public void logout(UUID tenantId) {
-		repo.getDataSourceTargets().remove(tenantId);
+	/**
+	 * Notice that there is nothing special about these queries. You don't have to add tenant_id = ? to your SQL.
+	 * RLS protection is transparent to us because it's managed in the connection.
+	 * @param user
+	 * @return the updated user
+	 */
+	protected User updateUser(User user) {
+		User updated = null;
+		int rowsEffected = jdbc().update("UPDATE tenant_user SET email = ?, given_name = ?, family_name = ? WHERE user_id = ?", user.getEmail(), user.getGivenName(), user.getFamilyName(), user.getId());
+		if (rowsEffected == 1) {
+			updated = getUser(user.getId());
+		}
+		return updated;
+	}
+
+	@Override
+	public void deleteUser(User user) {
+		int rowsEffected = jdbc().update("DELETE FROM tenant_user WHERE user_id = ?", user.getId());
+		LOGGER.info("Delete from tenant_user returned {} effected rows", rowsEffected);
 	}
 }
