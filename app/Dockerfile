@@ -14,8 +14,8 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #FROM amazoncorretto:11-alpine-jdk AS build
-FROM public.ecr.aws/compose-x/amazoncorretto:11.alpine-amd64 AS build
-RUN ["/usr/lib/jvm/default-jvm/bin/jlink", "--compress=2", "--module-path", "/usr/lib/jvm/default-jvm/jmods", "--add-modules", "java.base,java.logging,java.xml,jdk.unsupported,java.sql,java.naming,java.desktop,java.management,java.security.jgss,java.instrument", "--output", "/jdk-mini"]
+FROM public.ecr.aws/amazoncorretto/amazoncorretto:11-al2-jdk AS build
+RUN ["/usr/lib/jvm/java/bin/jlink", "--compress=2", "--module-path", "/usr/lib/jvm/java/jmods", "--add-modules", "java.base,java.logging,java.xml,jdk.unsupported,java.sql,java.naming,java.desktop,java.management,java.security.jgss,java.instrument", "--output", "/jdk-mini"]
 
 #FROM alpine
 FROM public.ecr.aws/micahhausler/alpine:3.14.0
