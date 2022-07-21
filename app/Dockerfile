@@ -13,12 +13,10 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-#FROM amazoncorretto:11-alpine-jdk AS build
-FROM public.ecr.aws/amazoncorretto/amazoncorretto:11-al2-jdk AS build
-RUN ["/usr/lib/jvm/java/bin/jlink", "--compress=2", "--module-path", "/usr/lib/jvm/java/jmods", "--add-modules", "java.base,java.logging,java.xml,jdk.unsupported,java.sql,java.naming,java.desktop,java.management,java.security.jgss,java.instrument", "--output", "/jdk-mini"]
+FROM public.ecr.aws/docker/library/amazoncorretto:11-alpine-jdk AS build
+RUN ["/usr/lib/jvm/default-jvm/bin/jlink", "--compress=2", "--no-man-pages", "--module-path", "/usr/lib/jvm/default-jvm/jmods", "--add-modules", "java.base,java.logging,java.xml,jdk.unsupported,java.sql,java.sql.rowset,java.naming,java.desktop,java.management,java.security.jgss,java.instrument,java.net.http", "--output", "/jdk-mini"]
 
-#FROM alpine
-FROM public.ecr.aws/micahhausler/alpine:3.14.0
+FROM public.ecr.aws/docker/library/alpine:latest
 COPY --from=build /jdk-mini /opt/jdk/
 ENV PATH=$PATH:/opt/jdk/bin
 COPY ./target/SaaSFactoryPgRLS.war /usr/src/app/app.war

@@ -173,7 +173,7 @@ public class AdminServiceImpl implements AdminService {
     public boolean tenantExists(UUID tenantId) {
         boolean exists = false;
         try {
-            exists = admin().queryForObject("SELECT EXISTS(SELECT * FROM tenant WHERE tenant_id = ?)", new Object[] {tenantId}, Boolean.class);
+            exists = admin().queryForObject("SELECT EXISTS(SELECT * FROM tenant WHERE tenant_id = ?)", Boolean.class, tenantId);
         } catch (Exception e) {
             LOGGER.error("Error selecting tenant exists {}", tenantId, e);
         }
@@ -184,7 +184,7 @@ public class AdminServiceImpl implements AdminService {
     public boolean userExists(UUID userId) {
         boolean exists = false;
         try {
-            exists = admin().queryForObject("SELECT EXISTS(SELECT * FROM tenant_user WHERE user_id = ?)", new Object[] {userId}, Boolean.class);
+            exists = admin().queryForObject("SELECT EXISTS(SELECT * FROM tenant_user WHERE user_id = ?)", Boolean.class, userId);
         } catch (Exception e) {
             LOGGER.error("Error selecting tenant exists {}", userId, e);
         }
