@@ -48,6 +48,33 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     	  </div>
     	</div>
     </form>
+
+    <hr/>
+    <h3>Login to Tenant Administration</h3>
+    <p>
+      The administration pages create, edit and delete tenants over a database connection
+      that is <strong>not</strong> bound by row level security, so they require the
+      administrator credentials configured for this deployment. If none were configured,
+      those pages are unreachable by design.
+    </p>
+    <form action="/login" method="post">
+    <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}"/>
+    <div class="form-group row">
+      <div class="col">
+        <input type="text" name="username" class="form-control" placeholder="Administrator username" autocomplete="username"/>
+      </div>
+    </div>
+    <div class="form-group row">
+      <div class="col">
+        <input type="password" name="password" class="form-control" placeholder="Administrator password" autocomplete="current-password"/>
+      </div>
+    </div>
+    <div class="form-group row">
+      <div class="col">
+        <button type="submit" class="btn btn-primary">Sign in as administrator</button>
+      </div>
+    </div>
+    </form>
   </div>
   <script src="/webjars/jquery/3.5.1/jquery.min.js"></script>
   <script src="/webjars/bootstrap/4.5.0/js/bootstrap.bundle.min.js"></script>
