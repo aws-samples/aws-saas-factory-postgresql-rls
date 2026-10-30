@@ -3,6 +3,36 @@ Checkout the article on the AWS Database Blog [https://aws.amazon.com/blogs/data
 
 Isolating tenant data is a fundamental responsibility for Software as a Service (SaaS) providers. In this sample, produced by the AWS SaaS Factory, we show you one way to implement multi-tenant data isolation using PostgreSQL row level security policies.
 
+## Security notice — please read before deploying
+
+**This sample demonstrates row level security. It is not production ready, and it should not be exposed to the internet.**
+
+The specific thing to understand is that **the tenant login is not authentication.** It is a tenant
+picker: the login page lists every tenant and submits the selected tenant's id as the "password".
+`TenantAuthenticationProvider` ignores the username entirely and accepts any id belonging to a real
+tenant. That is deliberate — it is what lets you switch tenants and watch the row level security
+policies take effect, which is the point of the sample — but it means **anyone who can reach the
+application can act as any tenant.** No row level security policy helps here: the policy is doing
+exactly what it is told, and it is the tenant context that is unauthenticated.
+
+Consequently:
+
+- **The load balancer is `internal` and its security group is scoped to the VPC.** Reach the
+  application through the jump box, as described in *See it in action* below. Changing the scheme
+  back to `internet-facing` puts a tenant picker on the public internet.
+- **The tenant administration pages under `/admin` require credentials**, supplied as the
+  `AdminUiUsername` and `AdminUiPassword` stack parameters. Those pages create, edit and delete any
+  tenant over a database connection that is deliberately *not* bound by row level security, so they
+  are the most privileged surface here. If no credentials are configured the `/admin` pages are
+  unreachable rather than open.
+- **Database passwords are held in SSM Parameter Store** as `SecureString` values and injected into
+  the container as secrets.
+
+**If you are adapting this sample**, replace the tenant login with real authentication — Amazon
+Cognito, or any OIDC provider — and derive `app.current_tenant` from a verified token claim rather
+than a form field. Adding a password to the tenant picker is not enough on its own: the tenant
+identity has to come from something the user cannot choose.
+
 ## Prerequisites
 You will need an AWS account that you have administrative access to in order to run the CloudFormation template. The demo creates a new VPC for its resources.
 
@@ -36,6 +66,20 @@ A number of resources were created in your account including:
 
 ## See it in action
 When the CloudFormation stack is completely finished, the sample environment is ready for you to experiment with. First, you need the endpoint URL for the load balancer. You can get this from the Outputs of the CloudFormation stack, or you can go to the EC2 console and find it listed under Load Balancers.
+
+The load balancer is **internal**, so that hostname only resolves inside the VPC and you cannot
+browse to it directly. Reach it by forwarding a local port through the jump box, which means you
+need to have supplied an EC2 keypair when you created the stack:
+
+```bash
+ssh -i /path/to/your-key.pem -L 8080:<LoadBalancerEndpoint>:80 ec2-user@<JumpBoxPublicIp>
+```
+
+Then open `http://localhost:8080` in your browser. `LoadBalancerEndpoint` is the stack output shown
+below; the jump box's public IP is in the EC2 console.
+
+To use the Admin Tenant Management section you will be asked for the `AdminUiUsername` and
+`AdminUiPassword` you set when you created the stack.
 
 <p align="center"><img src="./images/cfn_outputs.png" alt="CloudFormation Outputs"/></p>
 

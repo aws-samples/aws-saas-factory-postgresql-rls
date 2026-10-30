@@ -47,6 +47,21 @@ Parameters:
     MinLength: 8
     AllowedPattern: ^[a-zA-Z0-9/@"' ]{8,}$
     ConstraintDescription: RDS passwords must be at least 8 characters in length
+  AdminUiUsername:
+    Description: Username for the SaaS administration pages under /admin
+    Type: String
+    Default: admin
+    MinLength: 1
+  AdminUiPassword:
+    Description: >-
+      Password for the SaaS administration pages under /admin. These pages create, edit
+      and delete any tenant over a database connection that is not bound by row level
+      security, so this is the credential that protects the whole tenant estate. Choose
+      something strong and do not reuse the database passwords.
+    Type: String
+    NoEcho: true
+    MinLength: 12
+    ConstraintDescription: The administration password must be at least 12 characters in length
   RDSInstanceType:
     Description: RDS Instance Type
     Type: String
@@ -379,7 +394,7 @@ Resources:
     Properties:
       FunctionName: !Sub saas-factory-pg-rls-ssm-secure
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: python3.7
+      Runtime: python3.12
       Timeout: 300
       MemorySize: 256
       Handler: index.lambda_handler
@@ -431,6 +446,13 @@ Resources:
       ServiceToken: !GetAtt LambdaSSMPutParamSecure.Arn
       Name: saas-factory-pg-rls-app-pw
       Value: !Ref DBAppPassword
+  InvokeLambdaSSMPutParamSecure3:
+    Type: Custom::CustomResource
+    DependsOn: LambdaSSMPutParamSecureLogs
+    Properties:
+      ServiceToken: !GetAtt LambdaSSMPutParamSecure.Arn
+      Name: saas-factory-pg-rls-admin-ui-pw
+      Value: !Ref AdminUiPassword
   LambdaClearEcrImagesLogs:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -442,7 +464,7 @@ Resources:
     Properties:
       FunctionName: !Sub saas-factory-pg-rls-clear-ecr
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: python3.7
+      Runtime: python3.12
       Timeout: 300
       MemorySize: 512
       Handler: index.lambda_handler
@@ -607,6 +629,7 @@ Resources:
                 Resource:
                   - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-owner-pw
                   - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-app-pw
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-admin-ui-pw
   ECSLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -659,11 +682,15 @@ Resources:
               Value: !Ref DBAppUsername
             - Name: DB_ADMIN_USER
               Value: !Ref DBMasterUsername
+            - Name: ADMIN_UI_USERNAME
+              Value: !Ref AdminUiUsername
           Secrets:
             - Name: DB_ADMIN_PASS
               ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-owner-pw
             - Name: DB_PASS
               ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-app-pw
+            - Name: ADMIN_UI_PASSWORD
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-admin-ui-pw
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     DependsOn: VPC
@@ -680,32 +707,35 @@ Resources:
       GroupId: !Ref ECSSecurityGroup
       SourceSecurityGroupId: !Ref ALBSecurityGroup
       IpProtocol: -1
-      Tags:
-        - Key: Name
-          Value: saas-factory-pg-rls-ecs-sg
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     DependsOn: VPC
     Properties:
       GroupName: saas-factory-pg-rls-alb-sg
-      GroupDescription: Access to the load balancer
+      GroupDescription: Access to the load balancer from inside the VPC only
       VpcId: !Ref VPC
+      # Scoped to the VPC rather than 0.0.0.0/0. The application's tenant login is a
+      # tenant picker rather than real authentication (see README.md), so this must not
+      # be reachable from the internet.
       SecurityGroupIngress:
-        - CidrIp: 0.0.0.0/0
+        - CidrIp: 10.0.0.0/16
           IpProtocol: tcp
           FromPort: 80
           ToPort: 80
   ECSLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Scheme: internet-facing
+      # Internal, in private subnets. Reach the application by port-forwarding through
+      # the jump box; README.md explains how. Changing this back to internet-facing puts
+      # an application whose tenant login is a picker onto the public internet.
+      Scheme: internal
       LoadBalancerAttributes:
         - Key: idle_timeout.timeout_seconds
           Value: 30
       Subnets:
-        - !Ref SubnetPublicA
-        - !Ref SubnetPublicB    
-      SecurityGroups: [!Ref ALBSecurityGroup]    
+        - !Ref SubnetPrivateA
+        - !Ref SubnetPrivateB
+      SecurityGroups: [!Ref ALBSecurityGroup]
   ALBTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -830,7 +860,7 @@ Resources:
     Properties:
       FunctionName: !Sub saas-factory-pg-rls-s3-clear
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: python3.7
+      Runtime: python3.12
       Timeout: 900
       MemorySize: 512
       Handler: index.lambda_handler
@@ -1162,7 +1192,7 @@ Resources:
     Properties:
       FunctionName: !Sub saas-factory-pg-rls-codebuild-start
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: python3.7
+      Runtime: python3.12
       Timeout: 60
       MemorySize: 512
       Handler: index.lambda_handler
