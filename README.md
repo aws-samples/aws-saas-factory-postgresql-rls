@@ -17,6 +17,13 @@ exactly what it is told, and it is the tenant context that is unauthenticated.
 
 Consequently:
 
+- **The tenant picker is off unless a deployment opts in.** The application defaults
+  `tenant.picker.enabled` to `false`, and with it off there is no provider that will accept a
+  tenant id as a credential, so tenant login fails rather than authenticating whoever asks. The
+  CloudFormation template in this repository sets `TENANT_PICKER_ENABLED=true`, because that
+  deployment is the demonstration and is not reachable from the internet. **If you lift this code
+  into your own application, leave it off and supply real authentication** — the default is the
+  safe one deliberately, so the picker is not inherited by accident.
 - **The load balancer is `internal` and its security group is scoped to the VPC.** Reach the
   application through the jump box, as described in *See it in action* below. Changing the scheme
   back to `internet-facing` puts a tenant picker on the public internet.
