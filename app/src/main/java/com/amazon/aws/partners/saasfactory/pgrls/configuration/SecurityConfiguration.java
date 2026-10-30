@@ -39,6 +39,16 @@ public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
 
     public final static String ADMIN_ROLE = "ADMIN";
 
+    /**
+     * Held by a tenant session established through the tenant picker. Both an administrator
+     * and a tenant are "authenticated", but their principals are different types -- a
+     * UserDetails for the administrator, a Tenant for a tenant session -- and TenantController
+     * casts the principal to Tenant. Gating /tenant/** on authentication alone therefore
+     * accepted an administrator session and then threw on that cast; requiring this role
+     * denies it cleanly instead.
+     */
+    public final static String TENANT_ROLE = "TENANT";
+
     @Autowired
     private TenantAuthenticationProvider authenticationProvider;
 
@@ -62,6 +72,28 @@ public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
                 && adminPassword != null && !adminPassword.trim().isEmpty();
     }
 
+    /**
+     * Whether the tenant picker on the login page is enabled. Defaults to false.
+     *
+     * The picker is not authentication. The login page lists every tenant and submits the
+     * selected tenant's id as the "password", and TenantAuthenticationProvider ignores the
+     * username, so anyone who can reach the application can hold a session as any tenant.
+     * That is intentional for the demonstration -- it is how you switch tenants and watch
+     * the row level security policies take effect -- but it is only safe in the sample's
+     * own deployment, which is not reachable from the internet.
+     *
+     * Defaulting to false means the CloudFormation stack opts in explicitly (it sets
+     * TENANT_PICKER_ENABLED=true) while code lifted out of this repository into another
+     * application does not silently inherit a login that authenticates nobody. If you are
+     * building on this, leave it off and supply real authentication instead.
+     */
+    @Value("${tenant.picker.enabled:false}")
+    private boolean tenantPickerEnabled;
+
+    public boolean isTenantPickerEnabled() {
+        return tenantPickerEnabled;
+    }
+
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
@@ -83,7 +115,22 @@ public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
                     + "administrator account has been registered and the /admin pages "
                     + "are unreachable. Set both to enable tenant administration.");
         }
-        auth.authenticationProvider(authenticationProvider);
+
+        // Registered only when the picker is explicitly enabled. Without it there is no
+        // provider that will accept a tenant id as a credential, so tenant login fails
+        // closed rather than authenticating whoever asks.
+        if (tenantPickerEnabled) {
+            LOGGER.warn("The tenant picker is ENABLED. The tenant login is a demonstration "
+                    + "convenience and not authentication: any caller who can reach this "
+                    + "application can hold a session as any tenant. Only run this way on a "
+                    + "deployment that is not reachable from the internet.");
+            auth.authenticationProvider(authenticationProvider);
+        } else {
+            LOGGER.info("The tenant picker is disabled (tenant.picker.enabled=false), so "
+                    + "tenant login is unavailable. Set TENANT_PICKER_ENABLED=true to run the "
+                    + "demonstration, or supply real authentication if you are building on "
+                    + "this sample.");
+        }
     }
 
     @Override
@@ -99,15 +146,24 @@ public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
     @Override
     public void configure(HttpSecurity http) throws Exception {
         http.authorizeRequests()
-                .antMatchers("/", "/health").permitAll() // landing page and ALB health check
+                // Landing page, ALB health check, and the error page. "/index.html" is listed
+                // explicitly because it is a mapped route: without it the page was reachable
+                // only because unmatched requests default to permitted, which the terminal
+                // denyAll() below removes.
+                .antMatchers("/", "/index.html", "/health", "/error").permitAll()
                 // The SaaS administration pages create, edit and delete any tenant, and
                 // they run over the table-owner connection in AdminDataSourceRepository,
                 // which is not bound by row level security. They therefore need a real
-                // administrator, not merely a session: the tenant login below establishes
-                // tenant context and grants no authorities, so a tenant session cannot
-                // satisfy this.
+                // administrator, not merely a session.
                 .antMatchers("/admin/**").hasRole(ADMIN_ROLE)
-                .antMatchers("/tenant/**").authenticated() // tenant user management is authenticated
+                // Requires a tenant session specifically, not merely an authenticated one.
+                // See TENANT_ROLE above: an administrator session is also authenticated, but
+                // its principal is not a Tenant, and TenantController casts to Tenant.
+                .antMatchers("/tenant/**").hasRole(TENANT_ROLE)
+                // Anything not matched above is denied rather than permitted. Without this a
+                // route added to any controller without a matching rule would be public with
+                // no warning -- the same class of mistake that left /admin/** open.
+                .anyRequest().denyAll()
             .and() // custom login form
                 .formLogin()
                     .loginPage("/login")

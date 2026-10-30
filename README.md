@@ -17,6 +17,13 @@ exactly what it is told, and it is the tenant context that is unauthenticated.
 
 Consequently:
 
+- **The tenant picker is off unless a deployment opts in.** The application defaults
+  `tenant.picker.enabled` to `false`, and with it off there is no provider that will accept a
+  tenant id as a credential, so tenant login fails rather than authenticating whoever asks. The
+  CloudFormation template in this repository sets `TENANT_PICKER_ENABLED=true`, because that
+  deployment is the demonstration and is not reachable from the internet. **If you lift this code
+  into your own application, leave it off and supply real authentication** — the default is the
+  safe one deliberately, so the picker is not inherited by accident.
 - **The load balancer is `internal` and its security group is scoped to the VPC.** Reach the
   application through the jump box, as described in *See it in action* below. Changing the scheme
   back to `internet-facing` puts a tenant picker on the public internet.
@@ -68,18 +75,35 @@ A number of resources were created in your account including:
 When the CloudFormation stack is completely finished, the sample environment is ready for you to experiment with. First, you need the endpoint URL for the load balancer. You can get this from the Outputs of the CloudFormation stack, or you can go to the EC2 console and find it listed under Load Balancers.
 
 The load balancer is **internal**, so that hostname only resolves inside the VPC and you cannot
-browse to it directly. Reach it by forwarding a local port through the jump box, which means you
-need to have supplied an EC2 keypair when you created the stack:
+browse to it directly. Reach it by forwarding a local port through the jump box. The jump box is
+only created if you supplied an EC2 keypair when you created the stack, so this requires one:
 
 ```bash
-ssh -i /path/to/your-key.pem -L 8080:<LoadBalancerEndpoint>:80 ec2-user@<JumpBoxPublicIp>
+ssh -i /path/to/your-key.pem -L 8080:<LoadBalancerEndpoint>:80 ec2-user@<JumpBoxDNS>
 ```
 
-Then open `http://localhost:8080` in your browser. `LoadBalancerEndpoint` is the stack output shown
-below; the jump box's public IP is in the EC2 console.
+Then open `http://localhost:8080` in your browser. Both `LoadBalancerEndpoint` and `JumpBoxDNS` are
+stack outputs — see the Outputs tab of the CloudFormation stack.
 
 To use the Admin Tenant Management section you will be asked for the `AdminUiUsername` and
 `AdminUiPassword` you set when you created the stack.
+
+**Log out before moving between sections.** The administration pages and the tenant pages require
+different sessions — an administrator session is not a tenant session — so after adding tenants as
+the administrator, use the Logout button before logging in as a tenant.
+
+### Updating an existing stack
+
+If you are updating a stack created before these changes, note that:
+
+- `AdminUiUsername` and `AdminUiPassword` are new parameters and `AdminUiPassword` has no default,
+  so you must supply it.
+- The load balancer changes from `internet-facing` to `internal` and moves to the private subnets,
+  which replaces it. It will get a **new DNS name**, and there is a short interruption while that
+  happens.
+- If you re-run the CodeBuild project without also updating the stack, the rebuilt image picks up
+  the new application defaults — including the tenant picker being off — while the stack's
+  environment variables stay as they were. Update the stack as well, rather than only rebuilding.
 
 <p align="center"><img src="./images/cfn_outputs.png" alt="CloudFormation Outputs"/></p>
 
