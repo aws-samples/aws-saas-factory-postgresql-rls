@@ -20,6 +20,7 @@ import com.amazon.aws.partners.saasfactory.pgrls.service.AdminService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -33,6 +34,10 @@ public class RootController {
 
     @Autowired
     private AdminService adminService;
+
+    // See SecurityConfiguration for what this gates and why it defaults to false.
+    @Value("${tenant.picker.enabled:false}")
+    private boolean tenantPickerEnabled;
 
     @GetMapping({"/", "/index.html"})
     public String index(Model model) {
@@ -50,7 +55,13 @@ public class RootController {
 
     @RequestMapping("/login")
     public String login(Model model) {
-        model.addAttribute("tenants", adminService.getTenants());
+        // The tenant list is read only when the picker is enabled. Listing every tenant to
+        // an anonymous caller is part of the picker rather than something the login page
+        // needs otherwise, so with the picker off that listing is not exposed either.
+        model.addAttribute("tenantPickerEnabled", tenantPickerEnabled);
+        if (tenantPickerEnabled) {
+            model.addAttribute("tenants", adminService.getTenants());
+        }
         return "login";
     }
 }

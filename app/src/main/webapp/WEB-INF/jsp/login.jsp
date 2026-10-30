@@ -26,7 +26,17 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   <body>
   <div class="container pt-3">
     <h3>Login to Tenant Management</h3>
-    <p>Choose the tenant you'd like to "authenticate" as to mange tenant users.</p>
+    <c:choose>
+    <c:when test="${tenantPickerEnabled}">
+    <p>
+      Choose the tenant you'd like to "authenticate" as to mange tenant users.
+      <br/>
+      <small class="text-muted">
+        This is a demonstration convenience, not authentication — it exists so you can
+        switch tenants and watch the row level security policies take effect. Anyone who
+        can reach this page can select any tenant. See the security notice in README.md.
+      </small>
+    </p>
     <form action="/login" method="post">
     <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}"/>
     <input type="hidden" name="password" id="password"/>
@@ -48,6 +58,21 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     	  </div>
     	</div>
     </form>
+    </c:when>
+    <c:otherwise>
+    <p>
+      The tenant picker is disabled. It is a demonstration convenience rather than
+      authentication, so it is off unless a deployment opts in by setting
+      <code>TENANT_PICKER_ENABLED=true</code>; the CloudFormation template in this
+      repository sets it for you.
+      <br/>
+      <small class="text-muted">
+        If you are building on this sample, leave it off and supply real authentication —
+        see the security notice in README.md. Tenant administration below is unaffected.
+      </small>
+    </p>
+    </c:otherwise>
+    </c:choose>
 
     <hr/>
     <h3>Login to Tenant Administration</h3>

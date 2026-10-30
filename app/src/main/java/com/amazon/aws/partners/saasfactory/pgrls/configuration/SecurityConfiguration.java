@@ -62,6 +62,28 @@ public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
                 && adminPassword != null && !adminPassword.trim().isEmpty();
     }
 
+    /**
+     * Whether the tenant picker on the login page is enabled. Defaults to false.
+     *
+     * The picker is not authentication. The login page lists every tenant and submits the
+     * selected tenant's id as the "password", and TenantAuthenticationProvider ignores the
+     * username, so anyone who can reach the application can hold a session as any tenant.
+     * That is intentional for the demonstration -- it is how you switch tenants and watch
+     * the row level security policies take effect -- but it is only safe in the sample's
+     * own deployment, which is not reachable from the internet.
+     *
+     * Defaulting to false means the CloudFormation stack opts in explicitly (it sets
+     * TENANT_PICKER_ENABLED=true) while code lifted out of this repository into another
+     * application does not silently inherit a login that authenticates nobody. If you are
+     * building on this, leave it off and supply real authentication instead.
+     */
+    @Value("${tenant.picker.enabled:false}")
+    private boolean tenantPickerEnabled;
+
+    public boolean isTenantPickerEnabled() {
+        return tenantPickerEnabled;
+    }
+
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
@@ -83,7 +105,22 @@ public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
                     + "administrator account has been registered and the /admin pages "
                     + "are unreachable. Set both to enable tenant administration.");
         }
-        auth.authenticationProvider(authenticationProvider);
+
+        // Registered only when the picker is explicitly enabled. Without it there is no
+        // provider that will accept a tenant id as a credential, so tenant login fails
+        // closed rather than authenticating whoever asks.
+        if (tenantPickerEnabled) {
+            LOGGER.warn("The tenant picker is ENABLED. The tenant login is a demonstration "
+                    + "convenience and not authentication: any caller who can reach this "
+                    + "application can hold a session as any tenant. Only run this way on a "
+                    + "deployment that is not reachable from the internet.");
+            auth.authenticationProvider(authenticationProvider);
+        } else {
+            LOGGER.info("The tenant picker is disabled (tenant.picker.enabled=false), so "
+                    + "tenant login is unavailable. Set TENANT_PICKER_ENABLED=true to run the "
+                    + "demonstration, or supply real authentication if you are building on "
+                    + "this sample.");
+        }
     }
 
     @Override
