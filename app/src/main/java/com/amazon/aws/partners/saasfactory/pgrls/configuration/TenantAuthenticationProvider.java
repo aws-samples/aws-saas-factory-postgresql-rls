@@ -26,9 +26,10 @@ import org.springframework.security.authentication.AuthenticationServiceExceptio
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.UUID;
 
 @Component
@@ -48,7 +49,15 @@ public class TenantAuthenticationProvider implements AuthenticationProvider {
         UsernamePasswordAuthenticationToken token = null;
         try {
             Tenant principal = adminService.getTenant(UUID.fromString(password));
-            token = new UsernamePasswordAuthenticationToken(principal, principal.getId(), new ArrayList<>());
+            // ROLE_TENANT distinguishes a tenant session from an administrator one. Both are
+            // "authenticated", but their principals are different types -- a Tenant here, a
+            // UserDetails for the administrator -- and TenantController casts the principal to
+            // Tenant. Without a distinct authority, /tenant/** would accept an administrator
+            // session and then fail on that cast. The role lets the security configuration
+            // deny it cleanly instead.
+            token = new UsernamePasswordAuthenticationToken(principal, principal.getId(),
+                    Collections.singletonList(
+                            new SimpleGrantedAuthority("ROLE_" + SecurityConfiguration.TENANT_ROLE)));
         } catch (Exception e) {
             LOGGER.error("Error authenticating", e);
             throw new AuthenticationServiceException("Error authenticating");

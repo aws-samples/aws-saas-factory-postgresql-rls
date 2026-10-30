@@ -33,6 +33,16 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     <div class="container pt-3">
       <h3>Admin Tenant Management</h3>
       <p>These actions will be executed as the SaaS administrator and not restricted by RLS policies.</p>
+      <p>
+        <small class="text-muted">
+          To move on to Tenant User Management you need to log out of this administrator
+          session first — the tenant pages require a tenant session, not an administrator one.
+        </small>
+      </p>
+      <form action="/logout" method="post">
+        <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}"/>
+        <button type="submit" class="btn btn-warning btn-sm">Logout</button>
+      </form>
       <p>&nbsp;</p>
       <c:if test="${not empty msg}">
         <div class="row">

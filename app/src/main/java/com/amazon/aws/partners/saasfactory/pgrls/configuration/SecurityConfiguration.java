@@ -39,6 +39,16 @@ public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
 
     public final static String ADMIN_ROLE = "ADMIN";
 
+    /**
+     * Held by a tenant session established through the tenant picker. Both an administrator
+     * and a tenant are "authenticated", but their principals are different types -- a
+     * UserDetails for the administrator, a Tenant for a tenant session -- and TenantController
+     * casts the principal to Tenant. Gating /tenant/** on authentication alone therefore
+     * accepted an administrator session and then threw on that cast; requiring this role
+     * denies it cleanly instead.
+     */
+    public final static String TENANT_ROLE = "TENANT";
+
     @Autowired
     private TenantAuthenticationProvider authenticationProvider;
 
@@ -136,15 +146,24 @@ public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
     @Override
     public void configure(HttpSecurity http) throws Exception {
         http.authorizeRequests()
-                .antMatchers("/", "/health").permitAll() // landing page and ALB health check
+                // Landing page, ALB health check, and the error page. "/index.html" is listed
+                // explicitly because it is a mapped route: without it the page was reachable
+                // only because unmatched requests default to permitted, which the terminal
+                // denyAll() below removes.
+                .antMatchers("/", "/index.html", "/health", "/error").permitAll()
                 // The SaaS administration pages create, edit and delete any tenant, and
                 // they run over the table-owner connection in AdminDataSourceRepository,
                 // which is not bound by row level security. They therefore need a real
-                // administrator, not merely a session: the tenant login below establishes
-                // tenant context and grants no authorities, so a tenant session cannot
-                // satisfy this.
+                // administrator, not merely a session.
                 .antMatchers("/admin/**").hasRole(ADMIN_ROLE)
-                .antMatchers("/tenant/**").authenticated() // tenant user management is authenticated
+                // Requires a tenant session specifically, not merely an authenticated one.
+                // See TENANT_ROLE above: an administrator session is also authenticated, but
+                // its principal is not a Tenant, and TenantController casts to Tenant.
+                .antMatchers("/tenant/**").hasRole(TENANT_ROLE)
+                // Anything not matched above is denied rather than permitted. Without this a
+                // route added to any controller without a matching rule would be public with
+                // no warning -- the same class of mistake that left /admin/** open.
+                .anyRequest().denyAll()
             .and() // custom login form
                 .formLogin()
                     .loginPage("/login")

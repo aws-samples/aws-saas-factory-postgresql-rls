@@ -32,11 +32,22 @@ import java.util.UUID;
  * the URL rule on /admin/** -- so a route added later without that rule cannot reach
  * them unauthenticated.
  *
- * getTenants() and getTenant() are deliberately NOT annotated: the login page lists
- * tenants to choose from and TenantAuthenticationProvider resolves one while the request
- * is still anonymous, so requiring an authority here would break the sample's own login.
- * That those reads are reachable anonymously is a property of the sample's simplified
- * authentication, which README.md now documents.
+ * The read methods are deliberately NOT annotated, and it is worth being precise about why,
+ * because "they are only reached anonymously" would be wrong:
+ *
+ *  - getTenants() and getTenant() are called while the request is still anonymous, by the
+ *    login page and by TenantAuthenticationProvider respectively, so requiring an authority
+ *    would break the sample's own login.
+ *  - getTenants(), tenantExists() and userExists() are ALSO called from TenantController,
+ *    i.e. from an authenticated tenant session. So a tenant session does read tenant records
+ *    over this RLS-bypassing connection, including rows belonging to other tenants.
+ *
+ * That second point is an accepted, deliberate property of the demonstration rather than an
+ * oversight: the sample's tenant context is not authenticated in the first place (see the
+ * security notice in README.md), so restricting these reads would not establish a boundary
+ * that the login already fails to establish. If you are adapting this sample, fix the
+ * identity layer first; annotating these methods on top of a tenant picker would only look
+ * like a control.
  */
 public interface AdminService {
 
