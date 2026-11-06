@@ -101,8 +101,11 @@ public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
 
     @Override
     protected void configure(AuthenticationManagerBuilder auth) throws Exception {
-        // The administrator is registered first so an administrator login is resolved by
-        // this provider rather than falling through to the tenant provider below.
+        // The administrator is registered first so a SUCCESSFUL administrator login is
+        // resolved here. Note ProviderManager does not stop at a provider that rejects a
+        // login: it records the failure and continues. So a failed administrator login does
+        // reach the tenant provider below, which is why that provider must refuse a
+        // non-UUID credential without parsing or logging it.
         if (administratorConfigured()) {
             PasswordEncoder encoder = passwordEncoder();
             auth.inMemoryAuthentication()

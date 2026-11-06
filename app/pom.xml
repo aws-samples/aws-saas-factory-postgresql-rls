@@ -69,6 +69,21 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 	</build>
 
 	<dependencies>
+		<!--
+		  HikariCP 4.0.3 declares slf4j-api 2.0.0-alpha1, and this project pins each Spring Boot
+		  artifact individually rather than importing the Spring Boot dependency BOM, so nothing
+		  overrode it. slf4j-api 2.x resolves its provider through ServiceLoader and therefore
+		  ignores the SLF4J 1.7-era binding in logback-classic 1.2.11 that ships here, so the
+		  application ran with NO logging at all: every LOGGER call a no-op and the CloudWatch
+		  log group the README directs operators to (/ecs/saas-factory-pg-rls-app) permanently
+		  empty. Pin slf4j-api to the 1.7.x line that matches logback-classic 1.2.11 and the
+		  jul-to-slf4j 1.7.36 already on the classpath.
+		-->
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<version>1.7.36</version>
+		</dependency>
 		<dependency>
 			<groupId>junit</groupId>
 			<artifactId>junit</artifactId>
