@@ -684,6 +684,12 @@ Resources:
               Value: !Ref DBMasterUsername
             - Name: ADMIN_UI_USERNAME
               Value: !Ref AdminUiUsername
+            # This deployment is the sanctioned demonstration, reached through the jump
+            # box rather than the internet, so it opts in to the tenant picker. The
+            # application defaults it off so code copied elsewhere does not inherit a
+            # login that authenticates nobody.
+            - Name: TENANT_PICKER_ENABLED
+              Value: "true"
           Secrets:
             - Name: DB_ADMIN_PASS
               ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/saas-factory-pg-rls-owner-pw

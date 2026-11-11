@@ -41,20 +41,36 @@ public class TenantLogoutHandler extends SimpleUrlLogoutSuccessHandler implement
 
     private DataSourceRepository databaseConnectionPools;
 
-    // Custom clean up of the database connection pool when we logout a tenant
+    // Custom clean up of the database connection pool when we logout a tenant.
+    //
+    // Only a tenant session owns a connection pool, so only a tenant session gets the
+    // cleanup. An administrator's principal is a UserDetails and an anonymous POST /logout
+    // carries no Authentication at all; this previously cast unconditionally, which threw
+    // ClassCastException for an administrator and NullPointerException when anonymous. In
+    // both cases LogoutFilter had already invalidated the session, so the user was logged
+    // out but saw an error page instead of the redirect -- on the very path the README now
+    // tells readers to take after adding tenants.
     @Override
     public void onLogoutSuccess(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, Authentication authentication) throws IOException, ServletException {
-        UUID tenantId = ((Tenant) authentication.getPrincipal()).getId();
-        LOGGER.info("Tenant logout: removing database connection pool for tenant {}", tenantId);
-        // Can't just call databaseConnectionPools.dataSource() because we just logged out the security context
-        // principal and we'll get a null pointer when it tries to resolve the pool from it's target map.
-        DataSource connectionPool = (DataSource) databaseConnectionPools.getDataSourceTargets().get(tenantId);
-        // Explicitly close down the connection pool
-        if (connectionPool != null) {
-            ((HikariDataSource) connectionPool).close();
+        if (authentication != null && authentication.getPrincipal() instanceof Tenant) {
+            UUID tenantId = ((Tenant) authentication.getPrincipal()).getId();
+            // Logging the tenant id is not a credential disclosure, even though the picker
+            // accepts a tenant id as its "password": when the picker is enabled, login.jsp
+            // renders every tenant's id into the page as <option value="${tenant.id}">, so
+            // the value is already published to anyone who can load /login. When the picker
+            // is disabled no provider accepts it as a credential at all.
+            LOGGER.info("Tenant logout: removing database connection pool for tenant {}", tenantId);
+            // Can't just call databaseConnectionPools.dataSource() because we just logged out the security context
+            // principal and we'll get a null pointer when it tries to resolve the pool from it's target map.
+            DataSource connectionPool = (DataSource) databaseConnectionPools.getDataSourceTargets().get(tenantId);
+            // Explicitly close down the connection pool
+            if (connectionPool != null) {
+                ((HikariDataSource) connectionPool).close();
+            }
+            // And remove it from the list of targets
+            databaseConnectionPools.getDataSourceTargets().remove(tenantId);
         }
-        // And remove it from the list of targets
-        databaseConnectionPools.getDataSourceTargets().remove(tenantId);
+        // Always redirect, whatever the principal type.
         super.onLogoutSuccess(httpServletRequest, httpServletResponse, authentication);
     }
 
